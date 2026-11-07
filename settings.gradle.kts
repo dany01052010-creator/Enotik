@@ -11,5 +11,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "FileDropper"
+rootProject.name = "Enotik-sborki"
 include(":app")

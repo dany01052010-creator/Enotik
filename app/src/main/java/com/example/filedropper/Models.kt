@@ -14,9 +14,10 @@ data class Preset(
     val id: String = UUID.randomUUID().toString(),
     var name: String,
     var note: String = "",
-    /** "folder" | "appdata" | "appobb" */
+    /** "folder" (выбрана через систему/проводник) | "path" (обычный путь) | "appdata" | "appobb" */
     var destKind: String = "folder",
     var destTreeUri: String = "",
+    var destPath: String = "",
     var destPackage: String = "",
     var destSub: String = "",
     var triggerPackage: String = "",
@@ -24,7 +25,7 @@ data class Preset(
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id); put("name", name); put("note", note)
-        put("destKind", destKind); put("destTreeUri", destTreeUri)
+        put("destKind", destKind); put("destTreeUri", destTreeUri); put("destPath", destPath)
         put("destPackage", destPackage); put("destSub", destSub)
         put("triggerPackage", triggerPackage); put("auto", auto)
     }
@@ -36,6 +37,7 @@ data class Preset(
             note = o.optString("note"),
             destKind = o.optString("destKind", "folder"),
             destTreeUri = o.optString("destTreeUri"),
+            destPath = o.optString("destPath"),
             destPackage = o.optString("destPackage"),
             destSub = o.optString("destSub"),
             triggerPackage = o.optString("triggerPackage"),
