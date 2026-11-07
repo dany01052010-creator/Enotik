@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var autoBtn: Button
     private lateinit var overlayBtn: Button
     private lateinit var shizukuBtn: Button
+    private lateinit var mtBtn: Button
 
     private var selectedId: String? = null
     private var onDestPicked: ((Uri) -> Unit)? = null
@@ -119,6 +120,8 @@ class MainActivity : Activity() {
         root.addView(label("Настройки", 16f, true))
         overlayBtn = btn("") { toggleOverlay() }
         root.addView(overlayBtn)
+        mtBtn = btn("") { toggleMt() }
+        root.addView(mtBtn)
         shizukuBtn = btn("") { shizukuAction() }
         root.addView(shizukuBtn)
         autoBtn = btn("") { toggleAuto() }
@@ -166,6 +169,8 @@ class MainActivity : Activity() {
         autoBtn.text = if (isAutoOn()) "Автоставить при запуске приложения: ВКЛ" else "Автоставить при запуске приложения: ВЫКЛ"
         overlayBtn.text = if (isOverlayOn()) "Плавающая кнопка на экране: ВКЛ" else "Плавающая кнопка на экране: ВЫКЛ"
         shizukuBtn.text = "Shizuku: " + shizukuState()
+        mtBtn.text = if (mtPackage() == null) "MT Manager не найден — выбор через систему"
+        else "Выбирать через MT Manager: " + (if (useMt()) "ВКЛ" else "ВЫКЛ")
     }
 
     private fun destSummary(p: Preset): String = when (p.destKind) {
@@ -223,18 +228,83 @@ class MainActivity : Activity() {
             type = "*/*"
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
-        startActivityForResult(i, REQ_FILES)
+        launchPicker(i, REQ_FILES)
+    }
+
+    private val mtPackages = listOf("bin.mt.plus", "bin.mt.plus.canary")
+
+    private fun mtPackage(): String? = mtPackages.firstOrNull {
+        try {
+            packageManager.getPackageInfo(it, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun useMt() = getSharedPreferences("app", MODE_PRIVATE).getBoolean("use_mt", true)
+
+    private fun toggleMt() {
+        getSharedPreferences("app", MODE_PRIVATE).edit().putBoolean("use_mt", !useMt()).apply()
+        refresh()
+    }
+
+    /** Адрес корня MT Manager в системном выборе (если MT Manager даёт свой провайдер файлов). */
+    private fun mtInitialUri(mt: String): Uri? = try {
+        val prov = packageManager.queryIntentContentProviders(Intent("android.content.action.DOCUMENTS_PROVIDER"), 0)
+            .firstOrNull { it.providerInfo.packageName == mt }
+        val auth = prov?.providerInfo?.authority?.substringBefore(';')
+        if (auth == null) null else {
+            contentResolver.query(
+                DocumentsContract.buildRootsUri(auth),
+                arrayOf(DocumentsContract.Root.COLUMN_DOCUMENT_ID), null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) DocumentsContract.buildDocumentUri(auth, c.getString(0)) else null
+            }
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Открывает выбор файла/папки сначала в MT Manager, если он есть; иначе — в системе. */
+    private fun launchPicker(base: Intent, req: Int) {
+        val mt = if (useMt()) mtPackage() else null
+        if (mt != null) {
+            val tries = mutableListOf(Intent(base).setPackage(mt))
+            if (base.action == Intent.ACTION_OPEN_DOCUMENT) {
+                tries.add(Intent(base).setAction(Intent.ACTION_GET_CONTENT).setPackage(mt))
+            }
+            for (t in tries) {
+                if (t.resolveActivity(packageManager) != null) {
+                    try {
+                        startActivityForResult(t, req)
+                        return
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            if (base.action == Intent.ACTION_OPEN_DOCUMENT_TREE || base.action == Intent.ACTION_OPEN_DOCUMENT) {
+                mtInitialUri(mt)?.let { base.putExtra(DocumentsContract.EXTRA_INITIAL_URI, it) }
+            }
+        }
+        startActivityForResult(base, req)
     }
 
     private fun pickFolder() {
-        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_DIR)
+        launchPicker(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_DIR)
     }
 
     private fun handleIncoming(i: Intent?) {
         if (i == null) return
-        if (i.getBooleanExtra("create", false)) {
-            i.removeExtra("create")
-            actionCreate()
+        val act = i.getStringExtra("action")
+        if (act != null) {
+            i.removeExtra("action")
+            when (act) {
+                "pick_files" -> pickFiles()
+                "pick_folder" -> pickFolder()
+                "quick" -> actionQuick()
+                "create" -> actionCreate()
+            }
             return
         }
         val uris = ArrayList<Uri>()
@@ -403,6 +473,10 @@ class MainActivity : Activity() {
     }
 
     private fun pickWithOtherManager() {
+        if (useMt() && mtPackage() != null) {
+            launchPicker(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_DEST)
+            return
+        }
         val oi = Intent("org.openintents.action.PICK_DIRECTORY").apply {
             data = Uri.parse("file:///sdcard")
             putExtra("org.openintents.extra.TITLE", "Куда поставить")
@@ -458,11 +532,11 @@ class MainActivity : Activity() {
                     pathEt.setText("")
                     destLabel.text = "Папка выбрана: " + (DocumentFile.fromTreeUri(this@MainActivity, u)?.name ?: "")
                 }
-                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_DEST)
+                launchPicker(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_DEST)
             }
         }
         val pickOther = Button(this).apply {
-            text = "Выбрать другим проводником"; isAllCaps = false
+            text = "Выбрать в MT Manager / другом проводнике"; isAllCaps = false
             setOnClickListener {
                 onDestPicked = { u ->
                     if (u.scheme == "file") {

@@ -17,15 +17,15 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
 
 /**
- * Маленькая плавающая кнопка «E» поверх всех приложений.
- * Остаётся на экране, даже если выйти из Enotik sborki.
- * Тап — открывает мини-меню, перетаскивание — двигает кнопку.
+ * Плавающая кнопка поверх всех приложений (остаётся, даже если выйти из Enotik sborki).
+ * Тап — открывает крупное меню, перетаскивание — двигает кнопку.
  */
 class OverlayService : Service() {
 
@@ -68,30 +68,24 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(8)
-            y = dp(220)
+            x = dp(12)
+            y = dp(240)
         }
 
         rootView = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        val bubble = TextView(this).apply {
-            text = "E"
-            textSize = 20f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#E61E88E5"))
-            }
-            layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
+        val bubble = ImageView(this).apply {
+            setImageResource(R.drawable.ic_launcher)
+            layoutParams = LinearLayout.LayoutParams(dp(68), dp(68))
         }
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            minimumWidth = dp(300)
+            setPadding(dp(12), dp(12), dp(12), dp(12))
             background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(Color.parseColor("#E6202020"))
+                cornerRadius = dp(16).toFloat()
+                setColor(Color.parseColor("#F2202020"))
             }
         }
         rootView.addView(bubble)
@@ -113,7 +107,7 @@ class OverlayService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (ev.rawX - touchX).toInt()
                     val dy = (ev.rawY - touchY).toInt()
-                    if (abs(dx) > dp(4) || abs(dy) > dp(4)) moved = true
+                    if (abs(dx) > dp(6) || abs(dy) > dp(6)) moved = true
                     lp.x = startX + dx
                     lp.y = startY + dy
                     wm.updateViewLayout(rootView, lp)
@@ -138,39 +132,58 @@ class OverlayService : Service() {
         }
     }
 
-    private fun chip(text: String, bg: String = "#37474F", onClick: (TextView) -> Unit): TextView =
-        TextView(this).apply {
-            this.text = text
-            textSize = 13f
-            setTextColor(Color.WHITE)
-            setPadding(dp(10), dp(6), dp(10), dp(6))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(8).toFloat()
-                setColor(Color.parseColor(bg))
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
-            setOnClickListener { onClick(this) }
+    private fun chip(
+        text: String,
+        bg: String = "#37474F",
+        weight: Float = 0f,
+        onClick: (TextView) -> Unit
+    ): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 17f
+        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        background = GradientDrawable().apply {
+            cornerRadius = dp(10).toFloat()
+            setColor(Color.parseColor(bg))
         }
+        layoutParams = if (weight > 0f)
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight).apply {
+                setMargins(dp(3), dp(3), dp(3), dp(3))
+            }
+        else LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+        setOnClickListener { onClick(this) }
+    }
 
     private fun rebuildPanel() {
         panel.removeAllViews()
         val pending = store.pendingDir().listFiles()?.size ?: 0
         panel.addView(TextView(this).apply {
             text = if (pending == 0) "Файлы не выбраны" else "Выбрано: $pending"
-            textSize = 12f
+            textSize = 15f
             setTextColor(Color.LTGRAY)
+            setPadding(dp(4), 0, 0, dp(6))
         })
+
+        panel.addView(chip("📂  Выбрать файл / ZIP", "#1565C0") { openApp("pick_files") })
+        panel.addView(chip("📁  Выбрать папку", "#1565C0") { openApp("pick_folder") })
+        panel.addView(chip("⚡  Поставить сразу — выбрать куда", "#E65100") {
+            if (pending == 0) toast("Сначала выбери файл, ZIP или папку")
+            else openApp("quick")
+        })
+
         val presets = store.all()
-        if (presets.isEmpty()) {
+        if (presets.isNotEmpty()) {
             panel.addView(TextView(this).apply {
-                text = "Кнопок нет"; textSize = 12f; setTextColor(Color.LTGRAY)
+                text = "Мои кнопки"; textSize = 15f; setTextColor(Color.LTGRAY)
+                setPadding(dp(4), dp(8), 0, dp(2))
             })
         }
         presets.forEach { p ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(chip("▶ ${p.name}", "#2E7D32") { place(p) })
+            row.addView(chip("▶  ${p.name}", "#2E7D32", 1f) { place(p) })
             row.addView(chip(if (armedDelete == p.id) "❓" else "🗑", "#B71C1C") { v ->
                 if (armedDelete == p.id) {
                     armedDelete = null
@@ -181,13 +194,18 @@ class OverlayService : Service() {
                     v.text = "❓"
                     ui.postDelayed({ if (armedDelete == p.id) { armedDelete = null; rebuildPanel() } }, 3000)
                 }
-            })
+            }.also { it.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) } })
             panel.addView(row)
         }
+
         val foot = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        foot.addView(chip("✚ Новая") { openApp(create = true) })
-        foot.addView(chip("Открыть") { openApp(create = false) })
-        foot.addView(chip("✕", "#616161") { panel.visibility = View.GONE })
+        foot.addView(chip("✚ Новая", "#37474F", 1f) {
+            if (pending == 0) toast("Сначала выбери файл, ZIP или папку") else openApp("create")
+        })
+        foot.addView(chip("Открыть", "#37474F", 1f) { openApp(null) })
+        foot.addView(chip("✕", "#616161", 1f) { panel.visibility = View.GONE })
         panel.addView(foot)
     }
 
@@ -201,13 +219,12 @@ class OverlayService : Service() {
         }.start()
     }
 
-    private fun openApp(create: Boolean) {
+    private fun openApp(action: String?) {
         panel.visibility = View.GONE
-        startActivity(
-            Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra("create", create)
-        )
+        val i = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (action != null) i.putExtra("action", action)
+        startActivity(i)
     }
 
     private fun toast(s: String, long: Boolean = false) {
