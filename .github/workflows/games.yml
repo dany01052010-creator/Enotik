@@ -1,0 +1,84 @@
+name: Build games
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'games/**'
+      - '.github/workflows/games.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find projects (unzip zip files)
+        id: find
+        run: |
+          mkdir -p games games_unzipped
+          shopt -s nullglob
+          for z in games/*.zip; do
+            n=$(basename "$z" .zip)
+            mkdir -p "games_unzipped/$n"
+            unzip -q -o "$z" -d "games_unzipped/$n"
+          done
+          find games games_unzipped -maxdepth 4 \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -not -path '*/.git/*' -printf '%h\n' | sort -u > projects.txt
+          echo "Найдено проектов:"; cat projects.txt
+          echo "count=$(wc -l < projects.txt)" >> "$GITHUB_OUTPUT"
+          cat projects.txt | head -1 | while read d; do
+            if [ -f "$d/java-version" ]; then echo "java=$(tr -dc '0-9' < "$d/java-version")" >> "$GITHUB_OUTPUT"; fi
+          done
+
+      - uses: actions/setup-java@v4
+        if: steps.find.outputs.count != '0'
+        with:
+          distribution: temurin
+          java-version: ${{ steps.find.outputs.java || '17' }}
+
+      - name: Accept Android licenses
+        if: steps.find.outputs.count != '0'
+        run: |
+          SDKM=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKM" --licenses > /dev/null || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.find.outputs.count != '0'
+        with:
+          gradle-version: 8.7
+
+      - name: Build every project
+        if: steps.find.outputs.count != '0'
+        run: |
+          ROOT=$(pwd)
+          mkdir -p "$ROOT/out"
+          FAILED=0
+          while read -r d; do
+            name=$(echo "$d" | tr '/' '_')
+            echo "::group::Сборка $d"
+            cd "$ROOT/$d"
+            if [ -f gradlew ]; then chmod +x gradlew; CMD="./gradlew"; else CMD="gradle"; fi
+            if $CMD assembleDebug --no-daemon --stacktrace; then
+              mkdir -p "$ROOT/out/$name"
+              find . -path '*build/outputs/apk/debug/*.apk' -exec cp {} "$ROOT/out/$name/" \;
+              echo "OK: $d"
+            else
+              echo "::error::Не собралось: $d"
+              FAILED=1
+            fi
+            echo "::endgroup::"
+            cd "$ROOT"
+          done < projects.txt
+          exit $FAILED
+
+      - name: Nothing to build
+        if: steps.find.outputs.count == '0'
+        run: echo "В папке games нет Android-проекта (нужен settings.gradle или settings.gradle.kts)."
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.find.outputs.count != '0'
+        with:
+          name: games-apk
+          path: out/**/*.apk
+          if-no-match-found: warn
