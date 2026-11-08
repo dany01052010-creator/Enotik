@@ -89,7 +89,7 @@ class OverlayService : Service() {
             }
         }
         rootView.addView(bubble)
-        rootView.addView(panel)
+        rootView.addView(panel, LinearLayout.LayoutParams(dp(300), LinearLayout.LayoutParams.WRAP_CONTENT))
 
         var startX = 0
         var startY = 0

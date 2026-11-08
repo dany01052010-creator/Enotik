@@ -472,6 +472,31 @@ class MainActivity : Activity() {
             .sortedBy { it.label.lowercase() }
     }
 
+    /** Свой обзор папок: видит Android/data и Android/obb через Shizuku (или root). */
+    private fun browseFolders(start: String, onPick: (String) -> Unit) {
+        val path = start.trimEnd('/').ifEmpty { "/" }
+        Thread {
+            val dirs = Placer.listDirs(path)
+            runOnUiThread {
+                val names = dirs ?: emptyList()
+                val items = mutableListOf("✔ Выбрать эту папку", "⬆ Наверх")
+                items.addAll(names.map { "📁 $it" })
+                val title = path + if (dirs == null) "\n(нет доступа — включи Shizuku)" else if (names.isEmpty()) "\n(подпапок нет)" else ""
+                AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setItems(items.toTypedArray()) { _, which ->
+                        when (which) {
+                            0 -> onPick(path)
+                            1 -> browseFolders(path.substringBeforeLast('/').ifEmpty { "/" }, onPick)
+                            else -> browseFolders("$path/${names[which - 2]}", onPick)
+                        }
+                    }
+                    .setNegativeButton("Отмена", null)
+                    .show()
+            }
+        }.start()
+    }
+
     private fun pickWithOtherManager() {
         if (useMt() && mtPackage() != null) {
             launchPicker(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_DEST)
@@ -552,6 +577,17 @@ class MainActivity : Activity() {
                 pickWithOtherManager()
             }
         }
+        val pickBrowse = Button(this).apply {
+            text = "📂 Обзор папок (видит Android/data)"; isAllCaps = false
+            setOnClickListener {
+                if (!Placer.shizukuReady()) toast("Для Android/data включи Shizuku (кнопка в настройках)")
+                browseFolders(Environment.getExternalStorageDirectory().path) { picked ->
+                    destTree = ""
+                    pathEt.setText(picked)
+                    destLabel.text = "Путь выбран"
+                }
+            }
+        }
         val destApp = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, apps)
         }
@@ -574,6 +610,7 @@ class MainActivity : Activity() {
             val f = destKind == "folder"
             pickDest.visibility = if (f) View.VISIBLE else View.GONE
             pickOther.visibility = if (f) View.VISIBLE else View.GONE
+            pickBrowse.visibility = if (f) View.VISIBLE else View.GONE
             destLabel.visibility = if (f) View.VISIBLE else View.GONE
             pathEt.visibility = if (f) View.VISIBLE else View.GONE
             destApp.visibility = if (f) View.GONE else View.VISIBLE
@@ -605,6 +642,7 @@ class MainActivity : Activity() {
         if (showDest) {
             form.addView(label("Куда ставить", 14f, true))
             form.addView(rg)
+            form.addView(pickBrowse)
             form.addView(pickDest)
             form.addView(pickOther)
             form.addView(destLabel)

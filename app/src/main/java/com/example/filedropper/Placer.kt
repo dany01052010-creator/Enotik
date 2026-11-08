@@ -218,6 +218,38 @@ object Placer {
         null
     }
 
+    /** Список подпапок. Для Android/data и Android/obb сначала Shizuku (напрямую система их не показывает). */
+    fun listDirs(path: String): List<String>? {
+        val protectedPath = path.contains("/Android/data") || path.contains("/Android/obb")
+        if (!protectedPath) {
+            File(path).listFiles()?.let { arr ->
+                return arr.filter { it.isDirectory }.map { it.name }.sortedBy { it.lowercase() }
+            }
+        }
+        if (shizukuReady()) {
+            try {
+                val proc = shizukuShell("ls -1pL ${q(path)} 2>/dev/null")
+                if (proc != null) {
+                    val lines = proc.inputStream.bufferedReader().readLines()
+                    proc.waitFor()
+                    return lines.filter { it.endsWith("/") }.map { it.removeSuffix("/") }
+                        .sortedBy { it.lowercase() }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        try {
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "ls -1pL ${q(path)}"))
+            val lines = proc.inputStream.bufferedReader().readLines()
+            if (proc.waitFor() == 0) {
+                return lines.filter { it.endsWith("/") }.map { it.removeSuffix("/") }
+                    .sortedBy { it.lowercase() }
+            }
+        } catch (_: Exception) {
+        }
+        return File(path).listFiles()?.filter { it.isDirectory }?.map { it.name }?.sortedBy { it.lowercase() }
+    }
+
     private fun tryShizuku(ctx: Context, items: List<File>, dest: File, overwrite: Boolean): Result? {
         if (!shizukuReady()) return null
         return try {
