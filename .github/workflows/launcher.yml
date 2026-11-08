@@ -1,0 +1,66 @@
+name: Build Enotik Launcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'launcher/**'
+      - '.github/workflows/launcher.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout this repo (patches)
+        uses: actions/checkout@v4
+        with:
+          path: enotik
+
+      - name: Checkout Amethyst-Android (LGPL-3.0)
+        uses: actions/checkout@v4
+        with:
+          repository: AngelAuraMC/Amethyst-Android
+          path: src
+          submodules: recursive
+
+      - name: Apply Enotik optimizations
+        run: python3 enotik/launcher/patch.py src
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Get JRE 8 runtime
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: build.yml
+          path: src/app_pojavlauncher/src/main/assets/components/jre
+          workflow_conclusion: completed
+          repo: AngelAuraMC/angelauramc-openjdk-build
+          branch: buildjre8
+          name: jre8-pojav
+
+      - name: Install Android SDK parts
+        run: |
+          SDKM=$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -1)
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-37" "build-tools;37.0.0" "ndk;27.3.13750724" || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: false
+          gradle-version: "9.6.1"
+
+      - name: Build APK
+        working-directory: src
+        run: |
+          ./scripts/languagelist_updater.sh
+          gradle :app_pojavlauncher:assembleDebug --no-daemon --stacktrace
+          mkdir -p ../out
+          cp app_pojavlauncher/build/outputs/apk/debug/app_pojavlauncher-debug.apk ../out/Enotik-Launcher.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Enotik-Launcher-apk
+          path: out/Enotik-Launcher.apk

@@ -18,3 +18,9 @@ GitHub → вкладка Actions → Build APK → Run workflow → внизу 
 
 ## Shizuku
 Установи Shizuku, запусти его, затем в приложении нажми «Shizuku» и дай разрешение.
+
+## Enotik Launcher
+Лаунчер Minecraft: Java Edition для Android на базе [Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android) (LGPL-3.0, преемник PojavLauncher).
+Исходник Amethyst скачивается при сборке, поверх накладываются оптимизации из `launcher/patch.py`.
+Сборка: Actions → «Build Enotik Launcher» → Run workflow → Artifacts → `Enotik-Launcher-apk`.
+Нужен лицензионный аккаунт Minecraft.
