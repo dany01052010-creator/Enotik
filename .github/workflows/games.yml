@@ -2,6 +2,8 @@ name: Build games
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
   push:
     paths:
       - 'games/**'
@@ -15,8 +17,12 @@ jobs:
 
       - name: Find projects (unzip zip files)
         id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p games games_unzipped
+          # большие zip (до 2 ГБ) берём из релиза с тегом games
+          gh release download games --repo "$GITHUB_REPOSITORY" --pattern '*.zip' --dir games --clobber || echo 'релиза games нет — пропускаю'
           shopt -s nullglob
           for z in games/*.zip; do
             n=$(basename "$z" .zip)
