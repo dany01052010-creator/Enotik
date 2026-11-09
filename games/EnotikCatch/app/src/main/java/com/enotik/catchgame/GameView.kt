@@ -42,6 +42,7 @@ class GameView(ctx: Context) : View(ctx) {
     private var lives = 3
     private var combo = 0
     private var over = false
+    private var started = false
 
     private val items = ArrayList<Item>()
     private val popups = ArrayList<Popup>()
@@ -72,7 +73,7 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun restart() {
         items.clear(); popups.clear()
-        score = 0; lives = 3; combo = 0; over = false
+        score = 0; lives = 3; combo = 0; over = false; started = true
         spawnTimer = 0.6f; overTime = 0f; time = 0f
         last = System.nanoTime()
     }
@@ -160,7 +161,8 @@ class GameView(ctx: Context) : View(ctx) {
         if (dt > 0.05f) dt = 0.05f
 
         if (w > 0f) {
-            if (!over) update(dt) else overTime += dt
+            if (!started) { time += dt; raccoonX = w / 2 }
+            else if (!over) update(dt) else overTime += dt
             drawScene(c)
         }
         postInvalidateOnAnimation()
@@ -200,7 +202,8 @@ class GameView(ctx: Context) : View(ctx) {
         text.alpha = 255
 
         drawHud(c)
-        if (over) drawOver(c)
+        if (!started) drawTitle(c)
+        else if (over) drawOver(c)
         else if (time < 3f) {
             text.color = Color.WHITE
             text.textSize = w * 0.05f
@@ -300,6 +303,17 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
+    private fun drawTitle(c: Canvas) {
+        p.color = Color.argb(120, 0, 0, 0)
+        c.drawRect(0f, 0f, w, h, p)
+        text.color = Color.WHITE
+        text.textSize = min(w, h * 1.4f) * 0.12f
+        c.drawText("Енот-ловец", w / 2, h * 0.30f, text)
+        text.textSize = min(w, h * 1.4f) * 0.045f
+        c.drawText("Лови еду \uD83D\uDC1F\uD83C\uDF4E\u2B50, обходи бомбы \uD83D\uDCA3", w / 2, h * 0.40f, text)
+        c.drawText("Нажми на экран, чтобы начать", w / 2, h * 0.50f, text)
+    }
+
     private fun drawOver(c: Canvas) {
         p.color = Color.argb(170, 0, 0, 0)
         c.drawRect(0f, 0f, w, h, p)
@@ -321,7 +335,8 @@ class GameView(ctx: Context) : View(ctx) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (over && overTime > 0.7f) restart()
+                if (!started) restart()
+                else if (over && overTime > 0.7f) restart()
                 targetX = e.x
             }
             MotionEvent.ACTION_MOVE -> targetX = e.x
