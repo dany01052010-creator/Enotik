@@ -102,3 +102,33 @@ patch(J + "prefs/screens/LauncherPreferenceVideoFragment.java", [
      '        });\n'),
 ])
 print("patched OK")
+
+# 5. Раздел модов (Modrinth): Activity, кнопка в главном меню, запись в манифесте
+shutil.copy(here + "EnotikModsActivity.java", root + J + "EnotikModsActivity.java")
+patch(P + "src/main/AndroidManifest.xml", [
+    ('        <activity\n            android:name=".LauncherActivity"\n',
+     '        <activity\n            android:name=".EnotikModsActivity"\n            android:exported="false"\n'
+     '            android:label="Моды" />\n'
+     '        <activity\n            android:name=".LauncherActivity"\n'),
+])
+OPEN_BTN = '\t\t\t<com.kdt.mcgui.LauncherMenuButton\n\t\t\t\tandroid:id="@+id/open_files_button"'
+MODS_BTN = (
+    '\t\t\t<com.kdt.mcgui.LauncherMenuButton\n'
+    '\t\t\t\tandroid:id="@+id/enotik_mods_button"\n'
+    '\t\t\t\tstyle="@style/LauncherMenuButton.Universal"\n'
+    '\t\t\t\tandroid:layout_width="match_parent"\n'
+    '\t\t\t\tandroid:drawableStart="@drawable/ic_menu_install_jar"\n'
+    '\t\t\t\tandroid:text="@string/enotik_mods_button"\n'
+    '\t\t\t\tapp:layout_constraintTop_toBottomOf="@id/share_logs_button" />\n\n')
+patch(P + "src/main/res/layout/fragment_launcher.xml", [
+    (OPEN_BTN, MODS_BTN + OPEN_BTN),
+    ('\t\t\t\tapp:layout_constraintTop_toBottomOf="@id/share_logs_button" />\n\t\t</androidx',
+     '\t\t\t\tapp:layout_constraintTop_toBottomOf="@id/enotik_mods_button" />\n\t\t</androidx'),
+])
+patch(J + "fragments/MainMenuFragment.java", [
+    ('        Button mOpenDirectoryButton = view.findViewById(R.id.open_files_button);\n',
+     '        Button mOpenDirectoryButton = view.findViewById(R.id.open_files_button);\n'
+     '        view.findViewById(R.id.enotik_mods_button).setOnClickListener(v ->\n'
+     '                startActivity(new Intent(requireContext(), net.kdt.pojavlaunch.EnotikModsActivity.class)));\n'),
+])
+print("patched mods OK")

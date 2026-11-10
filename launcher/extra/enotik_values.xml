@@ -21,4 +21,5 @@
         <item>4</item>
         <item>5</item>
     </string-array>
+    <string name="enotik_mods_button" translatable="false">Скачать моды</string>
 </resources>
