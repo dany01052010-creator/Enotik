@@ -31,6 +31,8 @@ jobs:
           done
           find games games_unzipped -maxdepth 4 \( -name settings.gradle -o -name settings.gradle.kts \) \
             -not -path '*/.git/*' -printf '%h\n' | sort -u > projects.txt
+          # проекты с файлом .standalone собираются своей отдельной сборкой
+          while read -r d; do [ -f "$d/.standalone" ] || echo "$d"; done < projects.txt > projects2.txt; mv projects2.txt projects.txt
           echo "Найдено проектов:"; cat projects.txt
           echo "count=$(wc -l < projects.txt)" >> "$GITHUB_OUTPUT"
           cat projects.txt | head -1 | while read d; do
