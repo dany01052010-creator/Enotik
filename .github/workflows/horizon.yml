@@ -1,0 +1,48 @@
+name: Build Horizon-Android
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Vasysik/horizon-android
+          ref: android
+          path: horizon
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+      - name: SDK / NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.3.13750724" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+      - name: Rust
+        working-directory: horizon
+        run: |
+          rustup show
+          rustup target add aarch64-linux-android
+      - name: Prepare
+        working-directory: horizon
+        run: python tools/android_prepare.py
+      - name: Build arm64 APK
+        working-directory: horizon
+        run: python tools/android_build.py --abi arm64-v8a --public --gradle "$(which gradle)"
+      - name: Collect
+        run: |
+          mkdir -p out
+          find horizon/.local/android/apk -name '*.apk' -exec cp {} out/Horizon-Android.apk \;
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Horizon-Android-apk
+          path: out/Horizon-Android.apk
