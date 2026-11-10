@@ -50,4 +50,55 @@ patch(P + "src/main/java/net/kdt/pojavlaunch/utils/JREUtils.java", [
      '        if (!enotikUserGc && LauncherPreferences.PREF_RAM_ALLOCATION <= 3072) userArgs.add("-XX:+UseSerialGC");\n'
      '        userArgs.add("-XX:+DisableExplicitGC");\n'),
 ])
+
+# 4. Качество графики и яркость ниже системной
+import shutil, os
+here = os.path.dirname(os.path.abspath(__file__)) + "/extra/"
+J = P + "src/main/java/net/kdt/pojavlaunch/"
+for f in ("EnotikBrightness.java", "EnotikQuality.java"):
+    shutil.copy(here + f, root + J + "utils/" + f)
+shutil.copy(here + "enotik_values.xml", root + P + "src/main/res/values/enotik_values.xml")
+
+patch(J + "BaseActivity.java", [
+    ('        Tools.checkStorageInteractive(this);\n',
+     '        Tools.checkStorageInteractive(this);\n        net.kdt.pojavlaunch.utils.EnotikBrightness.apply(this);\n'),
+])
+patch(J + "MainActivity.java", [
+    ('        MCOptionUtils.load(gameDirPath);\n',
+     '        MCOptionUtils.load(gameDirPath);\n        net.kdt.pojavlaunch.utils.EnotikQuality.apply(this);\n'),
+])
+patch(P + "src/main/res/xml/pref_video.xml", [
+    ('    <PreferenceCategory android:title="@string/preference_category_video" >',
+     '    <PreferenceCategory android:title="@string/enotik_cat_title" >\n'
+     '        <ListPreference\n'
+     '            android:key="enotikQuality"\n'
+     '            android:title="@string/enotik_quality_title"\n'
+     '            android:summary="@string/enotik_quality_summary"\n'
+     '            android:entries="@array/enotik_quality_entries"\n'
+     '            android:entryValues="@array/enotik_quality_values"\n'
+     '            android:defaultValue="0"\n'
+     '            />\n'
+     '        <net.kdt.pojavlaunch.prefs.CustomSeekBarPreference\n'
+     '            android:key="enotikBrightness"\n'
+     '            android:title="@string/enotik_brightness_title"\n'
+     '            android:summary="@string/enotik_brightness_summary"\n'
+     '            android:defaultValue="100"\n'
+     '            app2:showSeekBarValue="true"\n'
+     '            app2:selectable="false"\n'
+     '            app2:min="1"\n'
+     '            app2:seekBarIncrement="1"\n'
+     '            />\n'
+     '    </PreferenceCategory>\n\n'
+     '    <PreferenceCategory android:title="@string/preference_category_video" >'),
+])
+patch(J + "prefs/screens/LauncherPreferenceVideoFragment.java", [
+    ('        resolutionSeekbar.setSuffix(" %");\n',
+     '        resolutionSeekbar.setSuffix(" %");\n'
+     '        CustomSeekBarPreference enotikBright = requirePreference("enotikBrightness", CustomSeekBarPreference.class);\n'
+     '        enotikBright.setSuffix(" %");\n'
+     '        enotikBright.setOnPreferenceChangeListener((pref, value) -> {\n'
+     '            net.kdt.pojavlaunch.utils.EnotikBrightness.apply(requireActivity(), (Integer) value);\n'
+     '            return true;\n'
+     '        });\n'),
+])
 print("patched OK")

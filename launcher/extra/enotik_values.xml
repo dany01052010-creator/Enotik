@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="enotik_cat_title" translatable="false">Enotik: качество и яркость</string>
+    <string name="enotik_quality_title" translatable="false">Качество графики</string>
+    <string name="enotik_quality_summary" translatable="false">Пресет записывается в options.txt при каждом запуске игры. Работает на всех версиях.</string>
+    <string name="enotik_brightness_title" translatable="false">Яркость экрана (ниже системной)</string>
+    <string name="enotik_brightness_summary" translatable="false">100% — как в системе. Меньше — темнее, чем даёт ползунок Android (только в лаунчере и игре).</string>
+    <string-array name="enotik_quality_entries" translatable="false">
+        <item>Не менять (как в игре)</item>
+        <item>Минимум (самый слабый телефон)</item>
+        <item>Низкое</item>
+        <item>Среднее</item>
+        <item>Высокое</item>
+        <item>Ультра</item>
+    </string-array>
+    <string-array name="enotik_quality_values" translatable="false">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+    </string-array>
+</resources>

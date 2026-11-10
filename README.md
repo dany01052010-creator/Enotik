@@ -23,4 +23,6 @@ GitHub → вкладка Actions → Build APK → Run workflow → внизу 
 Лаунчер Minecraft: Java Edition для Android на базе [Amethyst-Android](https://github.com/AngelAuraMC/Amethyst-Android) (LGPL-3.0, преемник PojavLauncher).
 Исходник Amethyst скачивается при сборке, поверх накладываются оптимизации из `launcher/patch.py`.
 Сборка: Actions → «Build Enotik Launcher» → Run workflow → Artifacts → `Enotik-Launcher-apk`.
+В настройках «Видео» → «Enotik: качество и яркость»: пресеты графики (минимум…ультра, пишутся в options.txt при запуске) и яркость ниже системной (1–100 %).
+Все версии из манифеста Mojang (релизы, снапшоты, беты, альфы) ставятся из списка версий в лаунчере.
 Нужен лицензионный аккаунт Minecraft.
