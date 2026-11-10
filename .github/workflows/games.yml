@@ -65,6 +65,9 @@ jobs:
             echo "::group::Сборка $d"
             cd "$ROOT/$d"
             if [ -f gradlew ]; then chmod +x gradlew; CMD="./gradlew"; else CMD="gradle"; fi
+            if [ -f prebuild.sh ]; then
+              bash prebuild.sh || { echo "::error::prebuild.sh не выполнился: $d"; FAILED=1; cd "$ROOT"; echo "::endgroup::"; continue; }
+            fi
             if $CMD assembleDebug --no-daemon --stacktrace; then
               mkdir -p "$ROOT/out/$name"
               find . -path '*build/outputs/apk/debug/*.apk' -exec cp {} "$ROOT/out/$name/" \;
