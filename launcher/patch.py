@@ -128,7 +128,57 @@ patch(P + "src/main/res/layout/fragment_launcher.xml", [
 patch(J + "fragments/MainMenuFragment.java", [
     ('        Button mOpenDirectoryButton = view.findViewById(R.id.open_files_button);\n',
      '        Button mOpenDirectoryButton = view.findViewById(R.id.open_files_button);\n'
-     '        view.findViewById(R.id.enotik_mods_button).setOnClickListener(v ->\n'
+     '        View enotikModsBtn = view.findViewById(R.id.enotik_mods_button);\n'
+     '        if (enotikModsBtn != null) enotikModsBtn.setOnClickListener(v ->\n'
      '                startActivity(new Intent(requireContext(), net.kdt.pojavlaunch.EnotikModsActivity.class)));\n'),
 ])
-print("patched mods OK")
+
+# 5b. Горизонтальный (планшетный) макет — та же кнопка модов (из-за его отсутствия было падение)
+OPEN_LAND = '            <com.kdt.mcgui.LauncherMenuButton\n                android:id="@+id/open_files_button"'
+MODS_LAND = (
+    '            <com.kdt.mcgui.LauncherMenuButton\n'
+    '                android:id="@+id/enotik_mods_button"\n'
+    '                style="@style/LauncherMenuButton.Universal"\n'
+    '                android:layout_width="match_parent"\n'
+    '                android:drawableStart="@drawable/ic_menu_install_jar"\n'
+    '                android:text="@string/enotik_mods_button"\n'
+    '                app:layout_constraintTop_toBottomOf="@id/share_logs_button" />\n\n')
+patch(P + "src/main/res/layout-land/fragment_launcher.xml", [
+    (OPEN_LAND, MODS_LAND + OPEN_LAND),
+    ('\n                app:layout_constraintTop_toBottomOf="@id/share_logs_button" />\n        </androidx',
+     '\n                app:layout_constraintTop_toBottomOf="@id/enotik_mods_button" />\n        </androidx'),
+])
+
+# 6. Название «Enotik Launcher» во всех переводах, иконка-енот, цвета меню
+import re, glob
+for f in glob.glob(root + P + "src/main/res/values*/strings.xml"):
+    lines = open(f, encoding="utf-8").read().split("\n")
+    out = []
+    for ln in lines:
+        if "http" not in ln and "AngelAura" not in ln:
+            ln = re.sub(r"\bAmethyst\b(?!-Android)", "Enotik Launcher", ln)
+        out.append(ln)
+    open(f, "w", encoding="utf-8").write("\n".join(out))
+
+res = root + P + "src/main/res/"
+for d in glob.glob(here + "icon/mipmap-*"):
+    for f in os.listdir(d):
+        shutil.copy(d + "/" + f, res + os.path.basename(d) + "/" + f)
+for name in ("ic_launcher.xml", "ic_launcher_round.xml"):
+    open(res + "mipmap-anydpi-v26/" + name, "w", encoding="utf-8").write(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+        '    <background android:drawable="@color/ic_launcher_background"/>\n'
+        '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
+        '</adaptive-icon>\n')
+patch(P + "src/main/res/values/ic_launcher_background.xml", [
+    ('#FFFFFF', '#2B2F3A'),
+])
+patch(P + "src/main/res/values/colors.xml", [
+    ('<color name="minebutton_color">#9649b8</color>', '<color name="minebutton_color">#E8832A</color>'),
+    ('<color name="background_app">#181818</color>', '<color name="background_app">#1C1815</color>'),
+    ('<color name="background_overlay">#464646</color>', '<color name="background_overlay">#4A3F36</color>'),
+    ('<color name="background_status_bar">#242424</color>', '<color name="background_status_bar">#2B231D</color>'),
+    ('<color name="background_bottom_bar">#232323</color>', '<color name="background_bottom_bar">#2A221C</color>'),
+])
+print("patched OK (mods, icon, name, colors)")
