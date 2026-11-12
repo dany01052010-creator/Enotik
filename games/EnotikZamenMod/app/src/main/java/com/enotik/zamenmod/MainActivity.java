@@ -16,6 +16,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.documentfile.provider.DocumentFile;
 
@@ -58,8 +59,8 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
-    private ScrollView menuScroll;
-    private ScrollView logScroll;
+    private ScrollView mainScroll;
+    private LinearLayout menuPanel;
     private LinearLayout packsBox;
     private TextView log;
     private TextView infoView;
@@ -127,11 +128,16 @@ public class MainActivity extends Activity {
         infoView.setPadding(0, dp(6), 0, dp(6));
         root.addView(infoView);
 
-        root.addView(button("Меню", v -> menuScroll.setVisibility(
-                menuScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE)));
+        root.addView(button("Меню", v -> {
+            boolean open = menuPanel.getVisibility() == View.VISIBLE;
+            menuPanel.setVisibility(open ? View.GONE : View.VISIBLE);
+            if (!open) mainScroll.post(() -> mainScroll.fullScroll(View.FOCUS_UP));
+        }));
 
         LinearLayout menu = new LinearLayout(this);
         menu.setOrientation(LinearLayout.VERTICAL);
+        menuPanel = menu;
+        menuPanel.setVisibility(View.GONE);
 
         menu.addView(text("Grand Mobile - номер сервера:", 14));
         serverInput = new EditText(this);
@@ -153,16 +159,15 @@ public class MainActivity extends Activity {
         menu.addView(button("Обновить список паков", v -> refreshPacks()));
         menu.addView(button("Откатить всё", v -> command("откат")));
 
-        menuScroll = new ScrollView(this);
-        menuScroll.addView(menu);
-        menuScroll.setVisibility(View.GONE);
-        root.addView(menuScroll, new LinearLayout.LayoutParams(MATCH, 0, 1f));
-
         log = text("", 14);
         log.setTextIsSelectable(true);
-        logScroll = new ScrollView(this);
-        logScroll.addView(log);
-        root.addView(logScroll, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.addView(menu, new LinearLayout.LayoutParams(MATCH, WRAP));
+        content.addView(log, new LinearLayout.LayoutParams(MATCH, WRAP));
+        mainScroll = new ScrollView(this);
+        mainScroll.addView(content);
+        root.addView(mainScroll, new LinearLayout.LayoutParams(MATCH, 0, 1f));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -194,7 +199,11 @@ public class MainActivity extends Activity {
     private void say(final String s) {
         runOnUiThread(() -> {
             log.append(s + "\n\n");
-            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+            if (menuPanel != null && menuPanel.getVisibility() == View.VISIBLE) {
+                if (!s.startsWith("> ")) Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+            } else {
+                mainScroll.post(() -> mainScroll.fullScroll(View.FOCUS_DOWN));
+            }
         });
     }
 
@@ -217,6 +226,16 @@ public class MainActivity extends Activity {
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            String start = req == REQ_GAME ? "primary:Android/media" : "primary:Download";
+            i.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                    android.provider.DocumentsContract.buildDocumentUri(
+                            "com.android.externalstorage.documents", start));
+        }
+        if (req == REQ_GAME) {
+            say("Подсказка: Android/data система закрыла от всех обычных приложений. "
+                    + "Выбирайте папку игры в Android/media или в обычной памяти телефона.");
+        }
         try {
             startActivityForResult(i, req);
         } catch (Exception e) {
