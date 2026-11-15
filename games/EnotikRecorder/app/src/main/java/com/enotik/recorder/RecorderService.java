@@ -12,7 +12,14 @@ import android.content.pm.ServiceInfo;
 import android.graphics.drawable.Icon;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
-import android.media.MediaRecorder;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
+import android.media.MediaFormat;
+import android.media.MediaMuxer;
+import android.view.Surface;
+import java.nio.ByteBuffer;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
@@ -45,7 +52,16 @@ public class RecorderService extends Service {
 
     private MediaProjection projection;
     private VirtualDisplay display;
-    private MediaRecorder recorder;
+    private MediaCodec vCodec, aCodec;
+    private MediaMuxer muxer;
+    private AudioRecord audioRec;
+    private Thread vThread, aThread;
+    private final Object lock = new Object();
+    private int vTrack = -1, aTrack = -1, tracksAdded = 0, expectedTracks = 1;
+    private boolean muxStarted = false, aborted = false;
+    private volatile boolean audioRunning = false;
+    private long t0 = 0, lastV = -1, lastA = -1;
+    private int samples = 0;
     private ParcelFileDescriptor pfd;
     private Uri outUri;
     private HandlerThread thread;
@@ -98,10 +114,10 @@ public class RecorderService extends Service {
     @SuppressWarnings("deprecation")
     private void begin(Intent i) throws Exception {
         SharedPreferences p = getSharedPreferences("rec", MODE_PRIVATE);
-        int res = p.getInt("res", 720);       // короткая сторона, 0 = оригинал
-        int fps = p.getInt("fps", 30);
-        int quality = p.getInt("quality", 1); // 0 низкое, 1 среднее, 2 высокое
-        int orient = p.getInt("orient", 0);   // 0 авто, 1 горизонт, 2 вертикаль
+        int res = p.getInt("res2", 480);       // короткая сторона, 0 = оригинал
+        int fps = p.getInt("fps2", 30);
+        int quality = p.getInt("quality2", 1); // 0 низкое, 1 среднее, 2 высокое
+        int orient = p.getInt("orient", 0);    // 0 авто, 1 горизонт, 2 вертикаль
         boolean mic = p.getBoolean("mic", false);
         boolean hevc = p.getBoolean("hevc", false);
 
@@ -118,8 +134,8 @@ public class RecorderService extends Service {
         sLong &= ~1;
         int w = land ? sLong : sShort;
         int h = land ? sShort : sLong;
-        double bpp = quality == 0 ? 0.08 : quality == 2 ? 0.25 : 0.15;
-        int bitrate = (int) Math.max(2_000_000, Math.min(40_000_000, w * (double) h * fps * bpp));
+        double bpp = quality == 0 ? 0.06 : quality == 2 ? 0.18 : 0.10;
+        int bitrate = (int) Math.max(1_500_000, Math.min(30_000_000, w * (double) h * fps * bpp));
 
         // Файл в «Фильмы/Enotik Recorder» через MediaStore (разрешения на память не нужны)
         String name = "Enotik_" + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".mp4";
@@ -131,22 +147,34 @@ public class RecorderService extends Service {
         outUri = getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cv);
         if (outUri == null) throw new Exception("не удалось создать файл");
         pfd = getContentResolver().openFileDescriptor(outUri, "w");
+        muxer = new MediaMuxer(pfd.getFileDescriptor(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
 
-        recorder = Build.VERSION.SDK_INT >= 31 ? new MediaRecorder(this) : new MediaRecorder();
-        if (mic) recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        recorder.setVideoEncoder(hevc ? MediaRecorder.VideoEncoder.HEVC : MediaRecorder.VideoEncoder.H264);
+        // Видео: аппаратный кодер с НИЗКИМ приоритетом (не отбирает ресурсы у игры)
+        String mime = hevc ? MediaFormat.MIMETYPE_VIDEO_HEVC : MediaFormat.MIMETYPE_VIDEO_AVC;
+        MediaFormat vf = MediaFormat.createVideoFormat(mime, w, h);
+        vf.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+        vf.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
+        vf.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+        vf.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2);
+        vf.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
+        vf.setInteger(MediaFormat.KEY_PRIORITY, 1);            // 1 = не реальное время, уступает игре
+        vf.setInteger("max-fps-to-encoder", fps);              // лишние кадры отбрасываются до кодера
+        vCodec = MediaCodec.createEncoderByType(mime);
+        vCodec.configure(vf, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        Surface input = vCodec.createInputSurface();
+        vCodec.start();
+
+        expectedTracks = 1;
+        t0 = System.nanoTime() / 1000;
         if (mic) {
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            recorder.setAudioEncodingBitRate(128_000);
-            recorder.setAudioSamplingRate(44_100);
+            try {
+                startAudio();
+                expectedTracks = 2;
+            } catch (Throwable t) {
+                audioRunning = false;
+                toast("Микрофон недоступен: пишу без звука");
+            }
         }
-        recorder.setVideoSize(w, h);
-        recorder.setVideoFrameRate(fps);
-        recorder.setVideoEncodingBitRate(bitrate);
-        recorder.setOutputFile(pfd.getFileDescriptor());
-        recorder.prepare();
 
         thread = new HandlerThread("rec-cb", Process.THREAD_PRIORITY_BACKGROUND);
         thread.start();
@@ -163,32 +191,161 @@ public class RecorderService extends Service {
             }
         }, handler);
         display = projection.createVirtualDisplay("EnotikRec", w, h, m.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, recorder.getSurface(), null, handler);
-        recorder.start();
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, input, null, handler);
+
         running = true;
+        vThread = new Thread(this::drainVideo, "rec-video");
+        vThread.setPriority(Thread.MIN_PRIORITY);
+        vThread.start();
         toast("Запись началась (" + w + "×" + h + ", " + fps + " к/с)");
+    }
+
+    private void startAudio() throws Exception {
+        int rate = 44100;
+        int min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        audioRec = new AudioRecord(android.media.MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, Math.max(min * 2, 16384));
+        if (audioRec.getState() != AudioRecord.STATE_INITIALIZED) throw new Exception("AudioRecord");
+        MediaFormat af = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, rate, 1);
+        af.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+        af.setInteger(MediaFormat.KEY_BIT_RATE, 96_000);
+        af.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 8192);
+        aCodec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
+        aCodec.configure(af, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        aCodec.start();
+        audioRec.startRecording();
+        audioRunning = true;
+        aThread = new Thread(this::audioLoop, "rec-audio");
+        aThread.setPriority(Thread.MIN_PRIORITY);
+        aThread.start();
+    }
+
+    private void addTrack(boolean video, MediaFormat fmt) {
+        synchronized (lock) {
+            int idx = muxer.addTrack(fmt);
+            if (video) vTrack = idx; else aTrack = idx;
+            tracksAdded++;
+            if (tracksAdded >= expectedTracks && !muxStarted) {
+                muxer.start();
+                muxStarted = true;
+                lock.notifyAll();
+            }
+        }
+    }
+
+    private boolean waitStarted() {
+        synchronized (lock) {
+            while (!muxStarted && !aborted) {
+                try { lock.wait(100); } catch (InterruptedException e) { return false; }
+            }
+            return muxStarted && !aborted;
+        }
+    }
+
+    private void write(boolean video, ByteBuffer b, MediaCodec.BufferInfo bi) {
+        synchronized (lock) {
+            long pts = bi.presentationTimeUs;
+            if (video) { if (pts <= lastV) pts = lastV + 1; lastV = pts; }
+            else { if (pts <= lastA) pts = lastA + 1; lastA = pts; }
+            bi.presentationTimeUs = pts;
+            b.position(bi.offset);
+            b.limit(bi.offset + bi.size);
+            try {
+                muxer.writeSampleData(video ? vTrack : aTrack, b, bi);
+                samples++;
+            } catch (Throwable ignored) { }
+        }
+    }
+
+    private void drainVideo() {
+        MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
+        try {
+            while (!aborted) {
+                int idx = vCodec.dequeueOutputBuffer(bi, 20_000);
+                if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    addTrack(true, vCodec.getOutputFormat());
+                } else if (idx >= 0) {
+                    ByteBuffer b = vCodec.getOutputBuffer(idx);
+                    if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) bi.size = 0;
+                    if (bi.size > 0 && b != null && waitStarted()) {
+                        bi.presentationTimeUs = Math.max(0, bi.presentationTimeUs - t0);
+                        write(true, b, bi);
+                    }
+                    vCodec.releaseOutputBuffer(idx, false);
+                    if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break;
+                }
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private void audioLoop() {
+        MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
+        try {
+            while (audioRunning) {
+                int in = aCodec.dequeueInputBuffer(10_000);
+                if (in >= 0) {
+                    ByteBuffer ib = aCodec.getInputBuffer(in);
+                    ib.clear();
+                    int n = audioRec.read(ib, Math.min(ib.remaining(), 4096));
+                    long pts = Math.max(0, System.nanoTime() / 1000 - t0 - (Math.max(n, 0) / 2) * 1_000_000L / 44100);
+                    aCodec.queueInputBuffer(in, 0, Math.max(n, 0), pts, 0);
+                }
+                drainAudio(bi, false);
+            }
+            int in = aCodec.dequeueInputBuffer(100_000);
+            if (in >= 0) aCodec.queueInputBuffer(in, 0, 0, Math.max(0, System.nanoTime() / 1000 - t0), MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            drainAudio(bi, true);
+        } catch (Throwable ignored) { }
+    }
+
+    private void drainAudio(MediaCodec.BufferInfo bi, boolean untilEos) {
+        int guard = 0;
+        while (guard++ < 200) {
+            int idx = aCodec.dequeueOutputBuffer(bi, untilEos ? 20_000 : 0);
+            if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                addTrack(false, aCodec.getOutputFormat());
+            } else if (idx >= 0) {
+                ByteBuffer b = aCodec.getOutputBuffer(idx);
+                if ((bi.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) bi.size = 0;
+                if (bi.size > 0 && b != null && waitStarted()) write(false, b, bi);
+                aCodec.releaseOutputBuffer(idx, false);
+                if ((bi.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) return;
+            } else if (!untilEos) {
+                return;
+            }
+        }
     }
 
     private synchronized void stopRecording() {
         if (stopping) return;
         stopping = true;
-        boolean ok = false;
-        if (recorder != null && running) {
-            try {
-                recorder.stop();
-                ok = true;
-            } catch (RuntimeException e) {
-                ok = false; // запись была слишком короткой
-            }
-        }
+        boolean wasRunning = running;
         running = false;
+        audioRunning = false;
+        // сначала отключаем захват экрана, чтобы игра сразу перестала тратить ресурсы
+        try { if (display != null) display.release(); } catch (Throwable ignored) { }
+        try { if (vCodec != null && wasRunning) vCodec.signalEndOfInputStream(); } catch (Throwable ignored) { }
+        try { if (vThread != null) vThread.join(2500); } catch (Throwable ignored) { }
+        try { if (aThread != null) aThread.join(2500); } catch (Throwable ignored) { }
+        aborted = true;
+        synchronized (lock) { lock.notifyAll(); }
+        boolean ok = false;
+        try {
+            if (muxer != null && muxStarted && samples > 0) {
+                muxer.stop();
+                ok = true;
+            }
+        } catch (Throwable ignored) { }
         cleanup(!ok);
         if (ok) toast("Запись сохранена: Фильмы/Enotik Recorder");
     }
 
     private void cleanup(boolean deleteFile) {
         try { if (display != null) display.release(); } catch (Throwable ignored) { }
-        try { if (recorder != null) recorder.release(); } catch (Throwable ignored) { }
+        try { if (vCodec != null) vCodec.release(); } catch (Throwable ignored) { }
+        try { if (aCodec != null) aCodec.release(); } catch (Throwable ignored) { }
+        try { if (audioRec != null) { audioRec.stop(); audioRec.release(); } } catch (Throwable ignored) { }
+        try { if (muxer != null) muxer.release(); } catch (Throwable ignored) { }
         try { if (projection != null) projection.stop(); } catch (Throwable ignored) { }
         try { if (pfd != null) pfd.close(); } catch (Throwable ignored) { }
         if (outUri != null) {
@@ -203,7 +360,7 @@ public class RecorderService extends Service {
                 }
             } catch (Throwable ignored) { }
         }
-        display = null; recorder = null; projection = null; pfd = null; outUri = null;
+        display = null; vCodec = null; aCodec = null; audioRec = null; muxer = null; projection = null; pfd = null; outUri = null;
         if (thread != null) { thread.quitSafely(); thread = null; }
         running = false;
     }
