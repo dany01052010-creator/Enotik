@@ -43,7 +43,7 @@ jobs:
           set +e
           gradle testDebugUnitTest --no-daemon > test.log 2>&1
           code=$?
-          summary=$(grep -E "PASSED|FAILED|AssertionError|rules:|Vasya|Pety|Kolya|Anya|Zed|Bob|Spam1|^e: |BUILD" test.log | head -40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          summary=$(grep -E "^e: |PASSED|FAILED|AssertionError|rules:|Vasya|Pety|Kolya|Anya|Zed|Bob|Spam1|BUILD" test.log | head -60 | cut -c1-300 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
           echo "::notice title=unit-tests exit=$code::$summary"
           exit 0
       - name: Build debug APK
