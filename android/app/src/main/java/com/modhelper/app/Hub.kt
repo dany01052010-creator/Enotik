@@ -125,13 +125,48 @@ class Violations(private val file: File) {
     }
 }
 
-class Transcript {
+class Transcript(private val file: File) {
     private val lines = ArrayList<Pair<Long, String>>()
+
+    init {
+        try {
+            file.forEachLine { l ->
+                val p = l.indexOf('\t')
+                if (p > 0) {
+                    val t = l.substring(0, p).toLongOrNull()
+                    if (t != null) lines.add(t to l.substring(p + 1))
+                }
+            }
+        } catch (e: Exception) {
+            // истории ещё нет
+        }
+    }
 
     @Synchronized
     fun add(text: String) {
-        lines.add(System.currentTimeMillis() to text)
-        if (lines.size > 1000) lines.removeAt(0)
+        val clean = text.replace('\n', ' ').replace('\t', ' ')
+        val ts = System.currentTimeMillis()
+        lines.add(ts to clean)
+        try {
+            file.appendText("$ts\t$clean\n")
+        } catch (e: Exception) {
+            // не критично
+        }
+    }
+
+    @Synchronized
+    fun all(): List<Pair<Long, String>> = ArrayList(lines)
+
+    @Synchronized
+    fun size(): Int = lines.size
+
+    @Synchronized
+    fun clear() {
+        lines.clear()
+        try {
+            file.delete()
+        } catch (e: Exception) {
+        }
     }
 
     @Synchronized
@@ -166,7 +201,8 @@ object Hub {
     lateinit var prefs: SharedPreferences
     lateinit var violations: Violations
     val main = Handler(Looper.getMainLooper())
-    val transcript = Transcript()
+    lateinit var transcript: Transcript
+    val speechListeners = CopyOnWriteArrayList<() -> Unit>()
     val listeners = CopyOnWriteArrayList<() -> Unit>()
     val history = ArrayList<Ai.Msg>()
     val chatLog = ArrayList<Pair<String, String>>()
@@ -187,6 +223,13 @@ object Hub {
         ctx = c.applicationContext
         prefs = ctx.getSharedPreferences("modhelper", Context.MODE_PRIVATE)
         violations = Violations(File(ctx.filesDir, "violations.json"))
+        transcript = Transcript(File(ctx.filesDir, "speech_log.txt"))
+    }
+
+    fun speechChanged() {
+        main.post {
+            for (l in speechListeners) l()
+        }
     }
 
     fun s(key: String, def: String = ""): String = prefs.getString(key, def) ?: def

@@ -38,6 +38,13 @@ class CaptureService : Service() {
     private var h: Handler? = null
     private var held: Image? = null
     private var dirty = false
+    private var lastAccept = 0L
+
+    @Volatile
+    private var forceNext = false
+
+    @Volatile
+    private var accepted = 0L
 
     @Volatile
     private var lastFull: Bitmap? = null
@@ -92,9 +99,9 @@ class CaptureService : Service() {
         val mpm = getSystemService(MediaProjectionManager::class.java)
         val proj = mpm.getMediaProjection(code, data)
         projection = proj
-        fps = Hub.i("fps", 2).coerceIn(1, 6)
-        keepSec = Hub.i("buffer_min", 3).coerceIn(1, 15) * 60
-        val t = HandlerThread("modhelper-capture")
+        fps = Hub.i("fps_v2", 1).coerceIn(1, 6)
+        keepSec = Hub.i("buffer_min_v2", 2).coerceIn(1, 15) * 60
+        val t = HandlerThread("modhelper-capture", android.os.Process.THREAD_PRIORITY_BACKGROUND)
         t.start()
         thread = t
         val handler = Handler(t.looper)
@@ -115,7 +122,8 @@ class CaptureService : Service() {
     private fun setupDisplay() {
         val dm = DisplayMetrics()
         (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(dm)
-        val s = minOf(1f, 1920f / maxOf(dm.widthPixels, dm.heightPixels).toFloat())
+        val side = if (Hub.i("cap_q", 0) == 1) 1280f else 960f
+        val s = minOf(1f, side / maxOf(dm.widthPixels, dm.heightPixels).toFloat())
         w = (dm.widthPixels * s).toInt() and 1.inv()
         hh = (dm.heightPixels * s).toInt() and 1.inv()
         dpi = dm.densityDpi
@@ -127,10 +135,19 @@ class CaptureService : Service() {
                 null
             }
             if (img != null) {
-                synchronized(lock) {
-                    held?.close()
-                    held = img
-                    dirty = true
+                // игра рисует 60 кадров/с, а нам нужно 1–2: лишние сразу выбрасываем
+                val now = android.os.SystemClock.uptimeMillis()
+                if (forceNext || now - lastAccept >= 1000L / fps - 40) {
+                    lastAccept = now
+                    forceNext = false
+                    synchronized(lock) {
+                        held?.close()
+                        held = img
+                        dirty = true
+                        accepted++
+                    }
+                } else {
+                    img.close()
                 }
             }
         }, h)
@@ -173,8 +190,9 @@ class CaptureService : Service() {
         }
     }
 
-    private fun convertLocked(img: Image) {
+    private fun convertLocked(img: Image, fullWanted: Boolean) {
         val plane = img.planes[0]
+        plane.buffer.rewind()
         val rowPadding = plane.rowStride - plane.pixelStride * img.width
         val bw = img.width + rowPadding / plane.pixelStride
         val bmp = Bitmap.createBitmap(bw, img.height, Bitmap.Config.ARGB_8888)
@@ -184,14 +202,15 @@ class CaptureService : Service() {
             bmp.recycle()
             c
         } else bmp
-        lastFull = full
-        val sc = minOf(1f, 960f / maxOf(full.width, full.height).toFloat())
+        if (fullWanted) lastFull = full
+        val sc = minOf(1f, 640f / maxOf(full.width, full.height).toFloat())
         val small = Bitmap.createScaledBitmap(
             full, maxOf(2, (full.width * sc).toInt()), maxOf(2, (full.height * sc).toInt()), true
         )
         val bos = ByteArrayOutputStream()
-        small.compress(Bitmap.CompressFormat.JPEG, 72, bos)
+        small.compress(Bitmap.CompressFormat.JPEG, 60, bos)
         if (small !== full) small.recycle()
+        if (!fullWanted) full.recycle()
         lastJpeg = bos.toByteArray()
     }
 
@@ -199,7 +218,7 @@ class CaptureService : Service() {
         synchronized(lock) {
             val img = held
             if (img != null && dirty) {
-                convertLocked(img)
+                convertLocked(img, false)
                 dirty = false
             }
             val j = lastJpeg
@@ -216,11 +235,23 @@ class CaptureService : Service() {
 
     /** Свежий полноразмерный кадр экрана. Вызывать не из главного потока. */
     fun snapshot(): Bitmap? {
+        // просим самый свежий кадр и ждём его до 0.4 с (если экран не меняется — берём последний)
+        val before = accepted
+        forceNext = true
+        var waited = 0
+        while (accepted == before && waited < 400) {
+            try {
+                Thread.sleep(20)
+            } catch (e: InterruptedException) {
+                break
+            }
+            waited += 20
+        }
         synchronized(lock) {
             val img = held
-            if (img != null && dirty) {
+            if (img != null) {
                 try {
-                    convertLocked(img)
+                    convertLocked(img, true)
                     dirty = false
                 } catch (e: Exception) {
                     // вернём предыдущий кадр

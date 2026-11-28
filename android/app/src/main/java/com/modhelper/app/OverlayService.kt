@@ -32,6 +32,9 @@ class OverlayService : Service() {
     private var extra = ArrayList<Bitmap>()
     private var panelInput: EditText? = null
     private val refresh: () -> Unit = { render() }
+    private var voiceSv: ScrollView? = null
+    private var voiceY = 0
+    private var voiceStick = true
     private val clearToast = Runnable {
         toast = ""
         render()
@@ -66,6 +69,7 @@ class OverlayService : Service() {
         wm.addView(r, lp)
         Hub.overlay = this
         Hub.listeners.add(refresh)
+        Hub.speechListeners.add(refresh)
         render()
     }
 
@@ -151,6 +155,15 @@ class OverlayService : Service() {
 
     private fun render() {
         val r = root ?: return
+        val oldV = voiceSv
+        if (oldV != null) {
+            voiceY = oldV.scrollY
+            val ch = oldV.getChildAt(0)
+            voiceStick = ch == null || voiceY + oldV.height >= ch.height - dp(10)
+        } else {
+            voiceStick = true
+        }
+        voiceSv = null
         r.removeAllViews()
         r.background = rounded(C.BG, 12)
         val items = Hub.violations.items.filter { !it.hidden }
@@ -245,12 +258,27 @@ class OverlayService : Service() {
             }
         }
 
-        if (Hub.voiceOn) {
-            val lines = Hub.transcript.recent(120).takeLast(3)
-            if (lines.isNotEmpty()) {
-                val tv = label(lines.joinToString("\n") { "🎤 " + it.second }, 11f, C.MUTED)
-                tv.setPadding(dp(4), dp(8), dp(4), 0)
-                body.addView(tv)
+        if (Hub.voiceOn || Hub.transcript.size() > 0) {
+            val all = Hub.transcript.all().takeLast(500)
+            val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+            val head2 = label("🎤 Речь (листай вверх — старые слова)", 11f, C.MUTED, true)
+            head2.setPadding(dp(4), dp(8), dp(4), dp(2))
+            body.addView(head2)
+            val box = vbox()
+            box.setPadding(dp(6), dp(4), dp(6), dp(4))
+            if (all.isEmpty()) box.addView(label("Жду слова…", 11f, C.MUTED))
+            for ((t, x) in all) {
+                val tv = label(fmt.format(java.util.Date(t)) + "  " + x, 12f, C.FG)
+                tv.setPadding(0, dp(2), 0, dp(2))
+                box.addView(tv)
+            }
+            val vs = ScrollView(this)
+            vs.background = rounded(C.PANEL, 8)
+            vs.addView(box)
+            body.addView(vs, linp(MATCH, dp(150)))
+            voiceSv = vs
+            vs.post {
+                if (voiceStick) vs.fullScroll(View.FOCUS_DOWN) else vs.scrollTo(0, voiceY)
             }
         }
 
@@ -391,6 +419,7 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         Hub.listeners.remove(refresh)
+        Hub.speechListeners.remove(refresh)
         Hub.main.removeCallbacks(clearToast)
         try {
             root?.let { wm.removeView(it) }

@@ -89,7 +89,7 @@ class VoiceService : Service() {
             val text = if (list != null && list.isNotEmpty()) list[0] else ""
             if (text.isNotBlank()) {
                 Hub.transcript.add(text.trim())
-                Hub.changed()
+                Hub.speechChanged()
             }
             again(200L)
         }

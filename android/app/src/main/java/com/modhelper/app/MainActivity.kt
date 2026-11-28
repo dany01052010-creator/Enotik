@@ -35,7 +35,16 @@ class MainActivity : Activity() {
     private var tab = 0
     private val attachments = ArrayList<Bitmap>()
     private var draft = ""
-    private val refresh: () -> Unit = { if (!typing()) show(tab) }
+    private val refresh: () -> Unit = {
+        if (tab == 4) {
+            if (speechVoiceShown != Hub.voiceOn) show(4)
+        } else if (!typing()) show(tab)
+    }
+    private val speechRefresh: () -> Unit = { if (tab == 4) updateSpeech() }
+    private var speechSv: ScrollView? = null
+    private var speechList: LinearLayout? = null
+    private var speechShown = 0
+    private var speechVoiceShown = false
     private var rulesDraft: EditText? = null
     private var tplDraft: EditText? = null
 
@@ -51,7 +60,7 @@ class MainActivity : Activity() {
         window.statusBarColor = C.BG
         window.navigationBarColor = C.BG
         val bar = hbox()
-        val names = listOf("💬 Чат", "📜 Правила", "📋 Таблица", "🎥 Запись", "⚙ Настройки")
+        val names = listOf("💬 Чат", "📜 Правила", "📋 Таблица", "🎥 Запись", "🎤 Речь", "⚙ Настройки")
         for ((i, n) in names.withIndex()) {
             bar.addView(button(n, false) { saveDrafts(); show(i) }, linp(WRAP, WRAP, 0f).also { it.setMargins(dp(3), dp(6), dp(3), dp(6)) })
         }
@@ -67,13 +76,15 @@ class MainActivity : Activity() {
             ins
         }
         Hub.listeners.add(refresh)
-        tab = if (Hub.s("api_key").isBlank()) 4 else 0
+        Hub.speechListeners.add(speechRefresh)
+        tab = if (Hub.s("api_key").isBlank()) 5 else 0
         show(tab)
         askBasicPermissions()
     }
 
     override fun onDestroy() {
         Hub.listeners.remove(refresh)
+        Hub.speechListeners.remove(speechRefresh)
         super.onDestroy()
     }
 
@@ -100,6 +111,7 @@ class MainActivity : Activity() {
             1 -> rulesTab()
             2 -> tableTab()
             3 -> recTab()
+            4 -> speechTab()
             else -> settingsTab()
         }
         content.addView(v, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -244,16 +256,33 @@ class MainActivity : Activity() {
 
     private fun decode(uri: Uri): Bitmap? {
         return try {
-            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+            val bounds = BitmapFactory.Options()
+            bounds.inJustDecodeBounds = true
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2400) sample *= 2
+            val o = BitmapFactory.Options()
+            o.inSampleSize = sample
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, o) }
         } catch (e: Exception) {
             null
         }
     }
 
+    private fun pickedUris(data: Intent?): List<Uri> {
+        val out = ArrayList<Uri>()
+        val clip = data?.clipData
+        if (clip != null) {
+            for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { out.add(it) }
+        } else data?.data?.let { out.add(it) }
+        return out
+    }
+
     private fun pickImage(req: Int) {
         val i = Intent(Intent.ACTION_GET_CONTENT)
         i.type = "image/*"
-        startActivityForResult(Intent.createChooser(i, "Выбери скриншот"), req)
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        startActivityForResult(Intent.createChooser(i, "Выбери скриншоты (можно несколько)"), req)
     }
 
     // ------------------------------------------------------------ правила
@@ -266,7 +295,7 @@ class MainActivity : Activity() {
         col.addView(rules, linp(MATCH, WRAP, 0f, dp(6)))
         val row = hbox()
         row.addView(button("💾 Сохранить", true) { saveDrafts(); Toast.makeText(this, "Правила сохранены", Toast.LENGTH_SHORT).show(); show(1) }, linp(0, WRAP, 1f).also { it.rightMargin = dp(4) })
-        row.addView(button("🖼 Со скриншота") { saveDrafts(); pickImage(REQ_RULES_PICK) }, linp(0, WRAP, 1f))
+        row.addView(button("🖼 Со скриншотов (много)") { saveDrafts(); pickImage(REQ_RULES_PICK) }, linp(0, WRAP, 1f))
         col.addView(row, linp(MATCH, WRAP, 0f, dp(6)))
         col.addView(label("Как оформлять жалобы (образец, необязательно):", 13f, C.MUTED), linp(WRAP, WRAP, 0f, dp(14)))
         val tpl = edit("Например: Ник — пункт — причина — срок", Hub.s("template"), multiline = true)
@@ -368,20 +397,27 @@ class MainActivity : Activity() {
         )
         val s1 = hbox()
         s1.addView(label("Кадров/с (1–6): ", 12f, C.MUTED))
-        val fps = edit("2", Hub.i("fps", 2).toString())
+        val fps = edit("1", Hub.i("fps_v2", 1).toString())
         fps.inputType = android.text.InputType.TYPE_CLASS_NUMBER
         s1.addView(fps, linp(dp(60), WRAP))
         s1.addView(label("  Хранить минут: ", 12f, C.MUTED))
-        val mins = edit("3", Hub.i("buffer_min", 3).toString())
+        val mins = edit("2", Hub.i("buffer_min_v2", 2).toString())
         mins.inputType = android.text.InputType.TYPE_CLASS_NUMBER
         s1.addView(mins, linp(dp(60), WRAP))
         col.addView(s1, linp(MATCH, WRAP, 0f, dp(8)))
         col.addView(button("Сохранить (применится при следующем запуске)") {
-            Hub.setI("fps", (fps.text.toString().toIntOrNull() ?: 2).coerceIn(1, 6))
-            Hub.setI("buffer_min", (mins.text.toString().toIntOrNull() ?: 3).coerceIn(1, 15))
+            Hub.setI("fps_v2", (fps.text.toString().toIntOrNull() ?: 1).coerceIn(1, 6))
+            Hub.setI("buffer_min_v2", (mins.text.toString().toIntOrNull() ?: 2).coerceIn(1, 15))
             Toast.makeText(this, "Сохранено", Toast.LENGTH_SHORT).show()
         }, linp(WRAP, WRAP, 0f, dp(6)))
 
+        col.addView(
+            button(if (Hub.i("cap_q", 0) == 1) "Нагрузка: обычная (чётче, но игра может лагать)" else "Нагрузка: лёгкая (меньше лагов)") {
+                Hub.setI("cap_q", if (Hub.i("cap_q", 0) == 1) 0 else 1)
+                Toast.makeText(this, "Применится при следующем запуске записи", Toast.LENGTH_SHORT).show()
+                show(3)
+            }, linp(WRAP, WRAP, 0f, dp(8))
+        )
         col.addView(label("Вырезать нарушение", 15f, C.FG, true), linp(WRAP, WRAP, 0f, dp(18)))
         val s2 = hbox()
         s2.addView(label("от ", 12f, C.MUTED))
@@ -423,19 +459,7 @@ class MainActivity : Activity() {
         }, linp(WRAP, WRAP, 0f, dp(6)))
         col.addView(label("Клип прикрепится к последней записи в таблице.", 11f, C.MUTED))
 
-        col.addView(label("Голос → текст", 15f, C.FG, true), linp(WRAP, WRAP, 0f, dp(18)))
-        col.addView(
-            label(
-                "Слушает микрофон телефона. Звук самой игры Android распознавать не даёт, поэтому голоса игроков будут слышны, " +
-                    "только если звук идёт из динамика. Нужен интернет.", 12f, C.MUTED
-            )
-        )
-        col.addView(
-            button(if (Hub.voiceOn) "■ Остановить" else "🎤 Слушать", !Hub.voiceOn) { toggleVoice() },
-            linp(WRAP, WRAP, 0f, dp(6))
-        )
-        val lines = Hub.transcript.recent(600).takeLast(8)
-        if (lines.isNotEmpty()) col.addView(label(lines.joinToString("\n") { "• " + it.second }, 12f, C.FG), linp(WRAP, WRAP, 0f, dp(8)))
+        col.addView(label("Голос и речь игроков — во вкладке «🎤 Речь».", 12f, C.MUTED), linp(WRAP, WRAP, 0f, dp(18)))
         return scroll(col)
     }
 
@@ -493,28 +517,41 @@ class MainActivity : Activity() {
                 }
             }
             REQ_PICK -> {
-                val uri = data?.data
-                if (resultCode == RESULT_OK && uri != null) {
-                    decode(uri)?.let { attachments.add(it); show(0) }
+                if (resultCode == RESULT_OK) {
+                    for (u in pickedUris(data)) decode(u)?.let { attachments.add(it) }
+                    show(0)
                 }
             }
             REQ_RULES_PICK -> {
-                val uri = data?.data
-                if (resultCode == RESULT_OK && uri != null) {
-                    val bmp = decode(uri)
-                    if (bmp != null) {
-                        Toast.makeText(this, "Распознаю правила…", Toast.LENGTH_SHORT).show()
-                        thread {
+                val uris = if (resultCode == RESULT_OK) pickedUris(data) else emptyList()
+                if (uris.isNotEmpty()) {
+                    Toast.makeText(this, "Распознаю правила: скриншотов " + uris.size + "…", Toast.LENGTH_LONG).show()
+                    thread {
+                        var okCount = 0
+                        var lastErr = ""
+                        for ((n, u) in uris.withIndex()) {
+                            val bmp = decode(u) ?: continue
                             try {
                                 val text = Ai.transcribeRules(bmp)
+                                okCount++
                                 Hub.main.post {
                                     val old = Hub.s("rules")
                                     Hub.setS("rules", (if (old.isNotBlank()) old + "\n" else "") + text)
-                                    Toast.makeText(this, "Правила добавлены — проверь текст", Toast.LENGTH_LONG).show()
-                                    show(1)
+                                    if (tab == 1) show(1)
+                                    Toast.makeText(this, "Готово " + (n + 1) + " из " + uris.size, Toast.LENGTH_SHORT).show()
                                 }
                             } catch (e: Exception) {
-                                Hub.main.post { Toast.makeText(this, e.message ?: "Ошибка", Toast.LENGTH_LONG).show() }
+                                lastErr = e.message ?: "Ошибка"
+                                break
+                            }
+                        }
+                        Hub.main.post {
+                            if (lastErr.isNotEmpty()) {
+                                AlertDialog.Builder(this).setTitle("Не все скриншоты распознались")
+                                    .setMessage("Распознано: $okCount из " + uris.size + "\n\n" + lastErr)
+                                    .setPositiveButton("Ок", null).show()
+                            } else {
+                                Toast.makeText(this, "Правила добавлены — проверь текст", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -523,14 +560,89 @@ class MainActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------ речь
+    private fun speechLine(t: Long, x: String): View {
+        val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+        val tv = label(fmt.format(java.util.Date(t)) + "  " + x, 14f, C.FG)
+        tv.setTextIsSelectable(true)
+        tv.setPadding(dp(6), dp(4), dp(6), dp(4))
+        return tv
+    }
+
+    private fun speechTab(): View {
+        val col = pad(vbox())
+        speechVoiceShown = Hub.voiceOn
+        col.addView(
+            label(
+                "Здесь вся распознанная речь, без ограничений. Листай вверх — старые слова. История сохраняется на телефоне. " +
+                    "Слушает микрофон; звук самой игры Android не отдаёт, поэтому голоса слышны, только если идут из динамика. Нужен интернет.",
+                12f, C.MUTED
+            )
+        )
+        val row = hbox()
+        row.addView(
+            button(if (Hub.voiceOn) "■ Остановить" else "🎤 Слушать", !Hub.voiceOn) { toggleVoice() },
+            linp(WRAP, WRAP).also { it.rightMargin = dp(6) }
+        )
+        row.addView(button("🗑 Очистить историю") {
+            AlertDialog.Builder(this).setMessage("Удалить всю историю речи?").setPositiveButton("Да") { _, _ ->
+                Hub.transcript.clear(); Hub.speechChanged(); show(4)
+            }.setNegativeButton("Нет", null).show()
+        })
+        col.addView(row, linp(MATCH, WRAP, 0f, dp(8)))
+        val list = vbox()
+        val all = Hub.transcript.all()
+        if (all.isEmpty()) list.addView(label("Пока ничего не услышано.", 13f, C.MUTED))
+        for ((t, x) in all) list.addView(speechLine(t, x))
+        val sv = ScrollView(this)
+        sv.background = rounded(C.PANEL, 10)
+        sv.addView(list)
+        col.addView(sv, linp(MATCH, 0, 1f, dp(8)))
+        speechSv = sv
+        speechList = list
+        speechShown = all.size
+        sv.post { sv.fullScroll(View.FOCUS_DOWN) }
+        return col
+    }
+
+    private fun updateSpeech() {
+        val sv = speechSv ?: return
+        val list = speechList ?: return
+        val all = Hub.transcript.all()
+        if (all.size < speechShown) {
+            show(4)
+            return
+        }
+        val ch = sv.getChildAt(0)
+        val stick = ch == null || sv.scrollY + sv.height >= ch.height - dp(20)
+        if (speechShown == 0 && all.isNotEmpty()) list.removeAllViews()
+        for (i in speechShown until all.size) list.addView(speechLine(all[i].first, all[i].second))
+        speechShown = all.size
+        if (stick) sv.post { sv.fullScroll(View.FOCUS_DOWN) }
+    }
+
     // ------------------------------------------------------------ настройки
     private fun settingsTab(): View {
         val col = pad(vbox())
         col.addView(label("API-ключ Anthropic (console.anthropic.com → API Keys)", 13f, C.MUTED))
         val key = edit("sk-ant-…", Hub.s("api_key"), password = true)
+        key.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) { Hub.setS("api_key", s.toString().replace(Regex("\\s"), "")) }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
         col.addView(key, linp(MATCH, WRAP, 0f, dp(6)))
+        col.addView(label("Ключ сохраняется сам, как только ты его вставил.", 11f, C.MUTED))
         col.addView(label("Модель", 13f, C.MUTED), linp(WRAP, WRAP, 0f, dp(12)))
         val model = edit("claude-sonnet-5-5", Hub.s("model", "claude-sonnet-5-5"))
+        model.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val m = s.toString().trim()
+                if (m.isNotEmpty()) Hub.setS("model", m)
+            }
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+        })
         col.addView(model, linp(MATCH, WRAP, 0f, dp(6)))
         val row = hbox()
         row.addView(button("💾 Сохранить", true) {
@@ -539,15 +651,22 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Сохранено", Toast.LENGTH_SHORT).show()
         }, linp(WRAP, WRAP).also { it.rightMargin = dp(6) })
         row.addView(button("Проверить связь") {
-            Hub.setS("api_key", key.text.toString().trim())
+            Hub.setS("api_key", key.text.toString().replace(Regex("\\s"), ""))
             Hub.setS("model", model.text.toString().trim().ifEmpty { "claude-sonnet-5-5" })
             thread {
+                var ok = false
                 val msg = try {
-                    "Связь работает: " + Ai.ping()
+                    val a = Ai.ping()
+                    ok = true
+                    "Связь работает ✔ (ответ: $a)"
                 } catch (e: Exception) {
+                    ok = false
                     e.message ?: "Ошибка"
                 }
-                Hub.main.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+                Hub.main.post {
+                    AlertDialog.Builder(this).setTitle(if (ok) "Всё хорошо" else "Ошибка")
+                        .setMessage(msg).setPositiveButton("Ок", null).show()
+                }
             }
         })
         col.addView(row, linp(MATCH, WRAP, 0f, dp(12)))

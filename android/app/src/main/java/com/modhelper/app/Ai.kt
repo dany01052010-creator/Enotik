@@ -124,6 +124,7 @@ object Ai {
         }
         return when {
             code == 401 || code == 403 -> "API-ключ не подошёл (ошибка $code). Проверь ключ во вкладке «Настройки»."
+            code == 404 -> "Модель не найдена (404). Проверь название модели во вкладке «Настройки». $msg"
             code == 429 -> "Слишком много запросов или закончился лимит. Подожди немного. $msg"
             code >= 500 -> "Сервер Claude сейчас перегружен ($code). Попробуй ещё раз."
             else -> "Ошибка API $code: $msg"
@@ -131,7 +132,7 @@ object Ai {
     }
 
     private fun ask(system: String, messages: JSONArray, maxTokens: Int): String {
-        val key = Hub.s("api_key").trim()
+        val key = Hub.s("api_key").replace(Regex("\\s"), "")
         if (key.isEmpty()) throw AiError("Не указан API-ключ. Открой вкладку «Настройки» и вставь ключ Anthropic.")
         val model = Hub.s("model", "claude-sonnet-5-5").ifBlank { "claude-sonnet-5-5" }
         val body = JSONObject().put("model", model).put("max_tokens", maxTokens).put("messages", messages)
