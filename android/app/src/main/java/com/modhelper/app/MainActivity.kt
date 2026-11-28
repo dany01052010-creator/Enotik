@@ -199,7 +199,7 @@ class MainActivity : Activity() {
         row.addView(voice)
         row.addView(button("Отправить", true) { send(input) }, linp(0, WRAP, 1.2f).also { it.leftMargin = dp(4) })
         col.addView(row, linp(MATCH, WRAP, 0f, dp(6)))
-        val clear = button("Очистить чат") { Hub.chatLog.clear(); Hub.history.clear(); show(0) }
+        val clear = button("Очистить чат") { Hub.chatLog.clear(); show(0) }
         col.addView(clear, linp(WRAP, WRAP, 0f, dp(6)))
         return col
     }
