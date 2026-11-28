@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -100,7 +101,7 @@ class Violations(private val file: File) {
         return v
     }
 
-    fun addMany(found: List<Ai.Found>, clip: String): List<Violation> {
+    fun addMany(found: List<Engine.Found>, clip: String): List<Violation> {
         val out = ArrayList<Violation>()
         for (f in found) {
             val v = add(f.nick, f.rule, f.reason, f.punishment, clip)
@@ -174,11 +175,6 @@ class Transcript(private val file: File) {
         val limit = System.currentTimeMillis() - seconds * 1000L
         return lines.filter { it.first >= limit }
     }
-
-    fun asText(seconds: Int): String {
-        val fmt = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-        return recent(seconds).joinToString("\n") { "[" + fmt.format(java.util.Date(it.first)) + "] " + it.second }
-    }
 }
 
 class ClipHolder {
@@ -196,15 +192,17 @@ class ClipHolder {
     }
 }
 
+/** Что проверяем: текст, пояснение (ник или слова), скриншоты, сколько секунд недавней речи добавить. */
+class Req(val body: String, val note: String, val images: List<Bitmap>, val speechSeconds: Int)
+
 object Hub {
     lateinit var ctx: Context
     lateinit var prefs: SharedPreferences
     lateinit var violations: Violations
-    val main = Handler(Looper.getMainLooper())
     lateinit var transcript: Transcript
     val speechListeners = CopyOnWriteArrayList<() -> Unit>()
+    val main = Handler(Looper.getMainLooper())
     val listeners = CopyOnWriteArrayList<() -> Unit>()
-    val history = ArrayList<Ai.Msg>()
     val chatLog = ArrayList<Pair<String, String>>()
 
     @Volatile
@@ -264,46 +262,73 @@ object Hub {
             .build()
     }
 
-    /** Общий запрос к ИИ: и для чата, и для жалоб. Колбэки вызываются в главном потоке. */
-    fun askAi(
-        msg: Ai.Msg,
+    /** Новая фраза из голоса: в историю, и при включённой автопроверке — сразу по правилам. */
+    fun onSpeech(text: String) {
+        transcript.add(text)
+        speechChanged()
+        if (i("auto_speech", 0) == 1) {
+            val res = Engine.analyze(s("rules"), text, "")
+            if (res.found.isNotEmpty()) {
+                val added = violations.addMany(res.found, "")
+                if (added.isNotEmpty()) {
+                    changed()
+                    overlay?.flash("Речь: " + added.joinToString { it.rule.ifEmpty { "?" } + " " + it.reason.take(40) })
+                }
+            }
+        }
+    }
+
+    /**
+     * Проверка: читаем текст со скриншотов (на телефоне), собираем всё в один текст и прогоняем через Engine.
+     * Колбэки вызываются в главном потоке.
+     */
+    fun analyze(
+        req: Req,
         clip: ClipHolder?,
-        withVoice: Boolean,
-        onOk: (List<Ai.Found>, List<Violation>) -> Unit,
+        onOk: (List<Engine.Found>, List<Violation>) -> Unit,
         onFail: (String) -> Unit
     ) {
         if (busy) {
-            onFail("Подожди, предыдущий запрос ещё идёт.")
+            onFail("Подожди, предыдущая проверка ещё идёт.")
             return
         }
         busy = true
-        val hist = ArrayList<Ai.Msg>(history)
-        hist.add(msg)
-        val tr = if (withVoice) transcript.asText(90) else ""
         Thread {
             try {
-                val reply = Ai.chat(hist, tr)
+                val parts = ArrayList<String>()
+                if (req.body.isNotBlank()) parts.add(req.body)
+                val shown = ArrayList<String>()
+                for ((i, img) in req.images.withIndex()) {
+                    val t = Ocr.read(img)
+                    if (t.isNotBlank()) {
+                        parts.add(t)
+                        shown.add("Прочитал со скриншота " + (i + 1) + ":\n" + t.take(1200))
+                    } else {
+                        shown.add("Со скриншота " + (i + 1) + " текст не прочитался")
+                    }
+                }
+                if (req.speechSeconds > 0) {
+                    val sp = transcript.recent(req.speechSeconds).joinToString("\n") { it.second }
+                    if (sp.isNotBlank()) parts.add(sp)
+                }
+                val res = Engine.analyze(s("rules"), parts.joinToString("\n"), req.note)
                 val clipPath = clip?.await(40) ?: ""
                 main.post {
                     busy = false
-                    history.add(msg)
-                    history.add(Ai.Msg("assistant", reply))
-                    val found = Ai.extractViolations(reply)
-                    val shown = Ai.stripJson(reply)
-                    chatLog.add("bot" to (if (shown.isBlank()) "(пустой ответ)" else shown))
-                    var added: List<Violation> = emptyList()
-                    if (found.isNotEmpty()) {
-                        added = violations.addMany(found, clipPath)
+                    for (o in shown) chatLog.add("system" to o)
+                    chatLog.add("bot" to res.report)
+                    val added = violations.addMany(res.found, clipPath)
+                    if (res.found.isNotEmpty()) {
                         chatLog.add(
                             "system" to (if (added.isNotEmpty()) "В таблицу добавлено: " + added.size
                             else "Такие нарушения уже есть в таблице.")
                         )
                     }
                     changed()
-                    onOk(found, added)
+                    onOk(res.found, added)
                 }
-            } catch (e: Exception) {
-                val text = if (e is Ai.AiError) (e.message ?: "Ошибка") else "Непредвиденная ошибка: " + e.message
+            } catch (e: Throwable) {
+                val text = "Не получилось: " + (e.message ?: e.javaClass.simpleName)
                 main.post {
                     busy = false
                     chatLog.add("system" to ("⚠ " + text))

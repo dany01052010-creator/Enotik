@@ -30,6 +30,22 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
+      - name: Download OCR language data (rus, eng)
+        run: |
+          mkdir -p app/src/main/assets/tessdata
+          for l in rus eng; do
+            curl -L --fail --retry 4 -o app/src/main/assets/tessdata/$l.traineddata \
+              https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata
+          done
+          ls -l app/src/main/assets/tessdata
+      - name: Unit tests (info only)
+        run: |
+          set +e
+          gradle testDebugUnitTest --no-daemon > test.log 2>&1
+          code=$?
+          summary=$(grep -E "PASSED|FAILED|AssertionError|rules:|Vasya|Pety|Kolya|Anya|Zed|Bob|Spam1|^e: |BUILD" test.log | head -40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+          echo "::notice title=unit-tests exit=$code::$summary"
+          exit 0
       - name: Build debug APK
         run: |
           set +e

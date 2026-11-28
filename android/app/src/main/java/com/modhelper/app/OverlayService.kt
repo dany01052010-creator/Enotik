@@ -395,15 +395,11 @@ class OverlayService : Service() {
             }
             holder.latch.countDown()
         }
-        val prompt = "ЖАЛОБА. Первый скриншот — экран игры в момент жалобы. " +
-            (if (ex.isNotEmpty()) "Остальные скриншоты — доказательства модератора. " else "") +
-            "Определи ник нарушителя, нарушенный пункт правил, причину и срок наказания." +
-            (if (note.isNotEmpty()) "\nПояснение модератора: $note" else "")
         val imgs = ArrayList<Bitmap>()
         imgs.add(shot)
         imgs.addAll(ex)
         Hub.chatLog.add("user" to ("🚩 Жалоба" + (if (note.isNotEmpty()) ": $note" else "") + " [скриншотов: " + imgs.size + "]"))
-        Hub.askAi(Ai.Msg("user", prompt, imgs), holder, true, { found, added ->
+        Hub.analyze(Req("", note, imgs, 60), holder, { found, added ->
             panelOpen = false
             panelInput = null
             shotBitmap = null

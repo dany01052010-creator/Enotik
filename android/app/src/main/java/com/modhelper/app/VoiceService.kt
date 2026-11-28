@@ -88,8 +88,7 @@ class VoiceService : Service() {
             val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             val text = if (list != null && list.isNotEmpty()) list[0] else ""
             if (text.isNotBlank()) {
-                Hub.transcript.add(text.trim())
-                Hub.speechChanged()
+                Hub.onSpeech(text.trim())
             }
             again(200L)
         }

@@ -77,7 +77,7 @@ class MainActivity : Activity() {
         }
         Hub.listeners.add(refresh)
         Hub.speechListeners.add(speechRefresh)
-        tab = if (Hub.s("api_key").isBlank()) 5 else 0
+        tab = 0
         show(tab)
         askBasicPermissions()
     }
@@ -135,9 +135,10 @@ class MainActivity : Activity() {
         if (Hub.chatLog.isEmpty()) {
             log.addView(
                 label(
-                    "Как пользоваться:\n1. «Настройки» — вставь API-ключ Anthropic.\n2. «Правила» — вставь правила и сроки наказаний.\n" +
-                        "3. «Запись» — включи мини-окно и захват экрана.\n4. В игре жми 🚩 в мини-окне — и я найду ник, пункт и срок.\n" +
-                        "Здесь можно прислать скриншот или написать текст.", 13f, C.MUTED
+                    "Как пользоваться (ключи и интернет не нужны):\n1. «Правила» — вставь правила с номерами пунктов и сроками, например:\n" +
+                        "   1.2 Оскорбление игроков — мут 2 часа\n   Слова в «кавычках» считаются запрещёнными.\n" +
+                        "2. «Запись» — включи мини-окно и захват экрана.\n3. В игре жми 🚩 в мини-окне — прочитаю чат со скриншота, найду ник, пункт и срок.\n" +
+                        "Здесь можно прислать скриншот или вставить текст переписки. Ник можно указать строкой «Ник: Vasya».", 13f, C.MUTED
                 )
             )
         }
@@ -178,7 +179,7 @@ class MainActivity : Activity() {
             row.addView(label("нажми на картинку — убрать", 10f, C.MUTED))
             col.addView(row, linp(MATCH, WRAP, 0f, dp(6)))
         }
-        val input = edit("Напиши текст жалобы или вопрос", draft, multiline = true)
+        val input = edit("Вставь переписку или напиши: Ник: Vasya + что он написал", draft, multiline = true)
         input.minLines = 2
         input.maxLines = 5
         input.addTextChangedListener(object : android.text.TextWatcher {
@@ -212,7 +213,7 @@ class MainActivity : Activity() {
         Hub.chatLog.add("user" to (text + (if (imgs.isNotEmpty()) "\n[скриншотов: " + imgs.size + "]" else "")).trim())
         Hub.chatLog.add("system" to "Думаю…")
         show(0)
-        Hub.askAi(Ai.Msg("user", text, imgs), null, Hub.i("chat_voice", 0) == 1, { _, added ->
+        Hub.analyze(Req(text, "", imgs, if (Hub.i("chat_voice", 0) == 1) 90 else 0), null, { _, added ->
             removeThinking()
             if (added.isNotEmpty()) Hub.overlay?.flash("Новое нарушение: " + added.joinToString { it.nick })
             show(0)
@@ -532,7 +533,7 @@ class MainActivity : Activity() {
                         for ((n, u) in uris.withIndex()) {
                             val bmp = decode(u) ?: continue
                             try {
-                                val text = Ai.transcribeRules(bmp)
+                                val text = Ocr.read(bmp)
                                 okCount++
                                 Hub.main.post {
                                     val old = Hub.s("rules")
@@ -590,6 +591,13 @@ class MainActivity : Activity() {
             }.setNegativeButton("Нет", null).show()
         })
         col.addView(row, linp(MATCH, WRAP, 0f, dp(8)))
+        val auto = android.widget.CheckBox(this)
+        auto.text = "Сам проверять речь по правилам (ник неизвестен — будет «?»)"
+        auto.setTextColor(C.FG)
+        auto.isChecked = Hub.i("auto_speech", 0) == 1
+        auto.setOnCheckedChangeListener { _, c -> Hub.setI("auto_speech", if (c) 1 else 0) }
+        col.addView(auto, linp(MATCH, WRAP, 0f, dp(4)))
+        col.addView(button("🔍 Проверить речь за 10 минут") { checkSpeech() }, linp(WRAP, WRAP, 0f, dp(4)))
         val list = vbox()
         val all = Hub.transcript.all()
         if (all.isEmpty()) list.addView(label("Пока ничего не услышано.", 13f, C.MUTED))
@@ -603,6 +611,22 @@ class MainActivity : Activity() {
         speechShown = all.size
         sv.post { sv.fullScroll(View.FOCUS_DOWN) }
         return col
+    }
+
+    private fun checkSpeech() {
+        val et = edit("Ник говорившего (можно пусто)", "")
+        val box = vbox()
+        box.setPadding(dp(16), dp(8), dp(16), 0)
+        box.addView(et)
+        AlertDialog.Builder(this).setTitle("Проверить речь").setView(box)
+            .setPositiveButton("Проверить") { _, _ ->
+                val nick = et.text.toString().trim()
+                Hub.chatLog.add("user" to ("🎤 Проверка речи за 10 минут" + (if (nick.isNotEmpty()) " (ник: $nick)" else "")))
+                Hub.analyze(Req("", nick, emptyList(), 600), null, { f, _ ->
+                    Toast.makeText(this, if (f.isEmpty()) "Нарушений в речи не нашёл" else "Нашёл: " + f.size + " — см. вкладку «Таблица»", Toast.LENGTH_LONG).show()
+                    show(0)
+                }, { err -> Toast.makeText(this, err, Toast.LENGTH_LONG).show() })
+            }.setNegativeButton("Отмена", null).show()
     }
 
     private fun updateSpeech() {
@@ -624,58 +648,53 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------ настройки
     private fun settingsTab(): View {
         val col = pad(vbox())
-        col.addView(label("API-ключ Anthropic (console.anthropic.com → API Keys)", 13f, C.MUTED))
-        val key = edit("sk-ant-…", Hub.s("api_key"), password = true)
-        key.addTextChangedListener(object : android.text.TextWatcher {
-            override fun afterTextChanged(s: android.text.Editable?) { Hub.setS("api_key", s.toString().replace(Regex("\\s"), "")) }
-            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-        })
-        col.addView(key, linp(MATCH, WRAP, 0f, dp(6)))
-        col.addView(label("Ключ сохраняется сам, как только ты его вставил.", 11f, C.MUTED))
-        col.addView(label("Модель", 13f, C.MUTED), linp(WRAP, WRAP, 0f, dp(12)))
-        val model = edit("claude-sonnet-5-5", Hub.s("model", "claude-sonnet-5-5"))
-        model.addTextChangedListener(object : android.text.TextWatcher {
+        col.addView(label("Приложение работает само: без API-ключей и без интернета (интернет нужен только для голоса).", 13f, C.FG))
+        col.addView(label("Чем это работает: твои правила → пункты и сроки; скриншот → текст (распознавание на телефоне) → ник и сообщения → поиск нарушений по словарю и по запрещённым словам из правил.", 12f, C.MUTED), linp(WRAP, WRAP, 0f, dp(8)))
+
+        col.addView(label("Сколько секунд видео до жалобы вырезать в клип", 13f, C.MUTED), linp(WRAP, WRAP, 0f, dp(16)))
+        val cb = edit("40", Hub.i("clip_before", 40).toString())
+        cb.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        cb.addTextChangedListener(object : android.text.TextWatcher {
             override fun afterTextChanged(s: android.text.Editable?) {
-                val m = s.toString().trim()
-                if (m.isNotEmpty()) Hub.setS("model", m)
+                val v = s.toString().toIntOrNull()
+                if (v != null && v in 1..3600) Hub.setI("clip_before", v)
             }
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
         })
-        col.addView(model, linp(MATCH, WRAP, 0f, dp(6)))
-        val row = hbox()
-        row.addView(button("💾 Сохранить", true) {
-            Hub.setS("api_key", key.text.toString().trim())
-            Hub.setS("model", model.text.toString().trim().ifEmpty { "claude-sonnet-5-5" })
-            Toast.makeText(this, "Сохранено", Toast.LENGTH_SHORT).show()
-        }, linp(WRAP, WRAP).also { it.rightMargin = dp(6) })
-        row.addView(button("Проверить связь") {
-            Hub.setS("api_key", key.text.toString().replace(Regex("\\s"), ""))
-            Hub.setS("model", model.text.toString().trim().ifEmpty { "claude-sonnet-5-5" })
-            thread {
-                var ok = false
-                val msg = try {
-                    val a = Ai.ping()
-                    ok = true
-                    "Связь работает ✔ (ответ: $a)"
-                } catch (e: Exception) {
-                    ok = false
-                    e.message ?: "Ошибка"
-                }
-                Hub.main.post {
-                    AlertDialog.Builder(this).setTitle(if (ok) "Всё хорошо" else "Ошибка")
-                        .setMessage(msg).setPositiveButton("Ок", null).show()
-                }
-            }
-        })
-        col.addView(row, linp(MATCH, WRAP, 0f, dp(12)))
+        col.addView(cb, linp(dp(120), WRAP, 0f, dp(6)))
+
+        col.addView(label("Проверка распознавания текста", 13f, C.MUTED), linp(WRAP, WRAP, 0f, dp(16)))
+        col.addView(button("🔎 Проверить чтение текста") { testOcr() }, linp(WRAP, WRAP, 0f, dp(6)))
+
         col.addView(
             label(
-                "\nВажно: оверлей, запись экрана и микрофон могут не нравиться античитам и правилам сервера. " +
-                    "Запись голоса игроков тоже может быть запрещена. Claude только подсказывает — решение за тобой.", 12f, C.MUTED
+                "\nВажно: приложение ищет по словам и признакам и не понимает смысл и шутки. Всегда сверяй ник и пункт по экрану. " +
+                    "Оверлей, запись экрана и микрофон могут не нравиться античитам и правилам сервера; запись голоса игроков " +
+                    "тоже может быть запрещена. Решение о наказании принимаешь ты.", 12f, C.MUTED
             )
         )
         return scroll(col)
+    }
+
+    private fun testOcr() {
+        Toast.makeText(this, "Проверяю…", Toast.LENGTH_SHORT).show()
+        thread {
+            val msg = try {
+                val bmp = Bitmap.createBitmap(900, 260, Bitmap.Config.ARGB_8888)
+                val cv = android.graphics.Canvas(bmp)
+                cv.drawColor(android.graphics.Color.WHITE)
+                val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                p.color = android.graphics.Color.BLACK
+                p.textSize = 64f
+                cv.drawText("Vasya_228: Привет мир", 30f, 110f, p)
+                cv.drawText("Pety: проверка 123", 30f, 200f, p)
+                val t = Ocr.read(bmp)
+                "Должно быть: Vasya_228: Привет мир / Pety: проверка 123\n\nПрочитал:\n" + t
+            } catch (e: Throwable) {
+                "Ошибка: " + (e.message ?: e.javaClass.simpleName)
+            }
+            Hub.main.post { AlertDialog.Builder(this).setTitle("Чтение текста").setMessage(msg).setPositiveButton("Ок", null).show() }
+        }
     }
 }
