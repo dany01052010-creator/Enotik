@@ -179,7 +179,7 @@ class MainActivity : Activity() {
             row.addView(label("нажми на картинку — убрать", 10f, C.MUTED))
             col.addView(row, linp(MATCH, WRAP, 0f, dp(6)))
         }
-        val input = edit("Вставь переписку или напиши: Ник: Vasya + что он написал", draft, multiline = true)
+        val input = edit("Вставь переписку или напиши: Ник: Vasya ID 123 + что он написал", draft, multiline = true)
         input.minLines = 2
         input.maxLines = 5
         input.addTextChangedListener(object : android.text.TextWatcher {
@@ -316,7 +316,7 @@ class MainActivity : Activity() {
             card.background = rounded(C.PANEL, 10)
             card.setPadding(dp(10), dp(8), dp(10), dp(8))
             val top = hbox()
-            top.addView(label(v.nick, 16f, C.ACCENT, true), linp(0, WRAP, 1f))
+            top.addView(label(v.nick + (if (v.pid.isNotEmpty()) "  ·  ID " + v.pid else ""), 16f, C.ACCENT, true), linp(0, WRAP, 1f))
             top.addView(label(fmt.format(java.util.Date(v.ts)), 11f, C.MUTED))
             card.addView(top)
             val rl = ruleLabel(v.rule)
@@ -357,16 +357,18 @@ class MainActivity : Activity() {
         val r = edit("Пункт правил", v?.rule ?: "")
         val re = edit("Причина", v?.reason ?: "")
         val p = edit("Наказание (срок)", v?.punishment ?: "")
-        for (e in listOf(n, r, re, p)) col.addView(e, linp(MATCH, WRAP, 0f, dp(6)))
+        val pidEt = edit("ID игрока", v?.pid ?: "")
+        for (e in listOf(n, pidEt, r, re, p)) col.addView(e, linp(MATCH, WRAP, 0f, dp(6)))
         AlertDialog.Builder(this).setTitle(if (v == null) "Новая запись" else "Изменить").setView(col)
             .setPositiveButton("Сохранить") { _, _ ->
                 if (v == null) {
-                    Hub.violations.add(n.text.toString(), r.text.toString(), re.text.toString(), p.text.toString(), "")
+                    Hub.violations.add(n.text.toString(), r.text.toString(), re.text.toString(), p.text.toString(), "", pidEt.text.toString())
                 } else {
                     v.nick = n.text.toString().trim().ifEmpty { "?" }
                     v.rule = r.text.toString().trim()
                     v.reason = re.text.toString().trim()
                     v.punishment = p.text.toString().trim()
+                    v.pid = pidEt.text.toString().trim()
                     Hub.violations.save()
                 }
                 Hub.changed()
@@ -591,10 +593,22 @@ class MainActivity : Activity() {
             }.setNegativeButton("Нет", null).show()
         })
         col.addView(row, linp(MATCH, WRAP, 0f, dp(8)))
+        col.addView(label("Кто сейчас говорит (телефон не различает голоса — ник указываешь ты):", 12f, C.FG), linp(WRAP, WRAP, 0f, dp(4)))
+        val spRow = hbox()
+        val spNick = edit("Ник", Hub.s("speaker_nick"))
+        val spId = edit("ID", Hub.s("speaker_pid"))
+        spId.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        spRow.addView(spNick, linp(0, WRAP, 2f).also { it.rightMargin = dp(4) })
+        spRow.addView(spId, linp(0, WRAP, 1f).also { it.rightMargin = dp(4) })
+        spRow.addView(button("OK", true) {
+            Hub.setSpeaker(spNick.text.toString(), spId.text.toString())
+            Toast.makeText(this, "Дальше фразы записываются на: " + (Hub.speakerTag().ifEmpty { "никого" }), Toast.LENGTH_SHORT).show()
+        })
+        col.addView(spRow, linp(MATCH, WRAP, 0f, dp(4)))
         val auto = android.widget.CheckBox(this)
-        auto.text = "Сам проверять речь по правилам (ник неизвестен — будет «?»)"
+        auto.text = "Сам проверять речь по правилам и выдавать срок"
         auto.setTextColor(C.FG)
-        auto.isChecked = Hub.i("auto_speech", 0) == 1
+        auto.isChecked = Hub.i("auto_speech", 1) == 1
         auto.setOnCheckedChangeListener { _, c -> Hub.setI("auto_speech", if (c) 1 else 0) }
         col.addView(auto, linp(MATCH, WRAP, 0f, dp(4)))
         col.addView(button("🔍 Проверить речь за 10 минут") { checkSpeech() }, linp(WRAP, WRAP, 0f, dp(4)))

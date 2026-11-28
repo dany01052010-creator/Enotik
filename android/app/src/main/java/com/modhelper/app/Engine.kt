@@ -13,7 +13,7 @@ package com.modhelper.app
  *     берётся срок наказания.
  */
 object Engine {
-    data class Found(val nick: String, val rule: String, val reason: String, val punishment: String)
+    data class Found(val nick: String, val rule: String, val reason: String, val punishment: String, val pid: String = "")
 
     class Rule(
         val number: String,
@@ -26,7 +26,7 @@ object Engine {
         val norm: String = words.joinToString(" ")
     }
 
-    class Msg(val nick: String, val text: String)
+    class Msg(val nick: String, val text: String, val pid: String = "")
 
     class Result(val found: List<Found>, val report: String, val checked: Int)
 
@@ -297,9 +297,13 @@ object Engine {
 
     // ------------------------------------------------------------------ разбор сообщений
     private val TS = Regex("""^\s*[\[(]?\d{1,2}[:.]\d{2}(?::\d{2})?[\])]?\s*[-–]?\s*""")
-    private val COLON = Regex("""^(?:[\[(][^\])]{1,20}[\])]\s*)*<?([\p{L}\p{N}_.\-]{2,24})>?\s*[:»>]+\s*(.+)""")
-    private val BRACKET = Regex("""^[\[<]([\p{L}\p{N}_.\-]{2,24})[\]>]\s+(.+)""")
-    private val NICKLINE = Regex("""(?iu)^\s*(?:ник|нарушитель|игрок|nick)\s*[:=\-]\s*([\p{L}\p{N}_.\-]{2,24})\s*$""")
+    private val LEADID = Regex("""^\s*[\[(#](\d{1,6})[\])]\s*""")
+    private const val IDPART = """(?:\s*[\[(#]\s*(\d{1,10})\s*[\])]?)?"""
+    private val COLON = Regex("""^(?:[\[(][^\])]{1,20}[\])]\s*)*<?([\p{L}\p{N}_.\-]{2,24})>?""" + IDPART + """\s*[:»>]+\s*(.+)""")
+    private val BRACKET = Regex("""^[\[<]([\p{L}\p{N}_.\-]{2,24})[\]>]""" + IDPART + """\s+(.+)""")
+    private val NICKLINE = Regex("""(?iu)^\s*(?:ник|нарушитель|игрок|nick)\s*[:=\-]\s*([\p{L}\p{N}_.\-]{2,24})(?:[\s,;]+(?:id|ид|айди)\s*[:=#]?\s*(\d{1,10}))?\s*$""")
+    private val IDLINE = Regex("""(?iu)^\s*(?:id|ид|айди)\s*[:=#\-]?\s*(\d{1,10})\s*$""")
+    private val NOTE_NICK = Regex("""(?iu)^([\p{L}\p{N}_.\-]{2,24})(?:[\s,;]+(?:(?:id|ид|айди)\s*[:=#]?\s*)?(\d{1,10}))?$""")
     private val NOT_NICK = setOf(
         "нарушение", "причина", "правило", "пункт", "жалоба", "ник", "игрок", "чат", "итого", "примечание",
         "наказание", "срок", "время", "скриншот", "вывод", "важно", "внимание", "ответ", "вопрос", "http", "https",
@@ -322,9 +326,10 @@ object Engine {
         return null
     }
 
-    fun parseMessages(input: String, forcedNick: String): List<Msg> {
+    fun parseMessages(input: String, forcedNick: String, forcedPid: String = ""): List<Msg> {
         val out = ArrayList<Msg>()
         var current = forcedNick
+        var currentPid = forcedPid
         var structured = 0
         for (raw in input.lines()) {
             var line = raw.trim()
@@ -334,31 +339,47 @@ object Engine {
             val ni = NICKLINE.find(line)
             if (ni != null) {
                 current = ni.groupValues[1]
+                if (ni.groupValues[2].isNotEmpty()) currentPid = ni.groupValues[2]
                 continue
             }
+            val il = IDLINE.find(line)
+            if (il != null) {
+                currentPid = il.groupValues[1]
+                continue
+            }
+            var lead = ""
+            val lm = LEADID.find(line)
+            if (lm != null) {
+                lead = lm.groupValues[1]
+                line = line.substring(lm.range.last + 1).trim()
+                if (line.isEmpty()) continue
+            }
             var nick: String? = null
+            var pid = ""
             var text = ""
             val m = COLON.find(line)
             if (m != null && m.groupValues[1].lowercase() !in NOT_NICK) {
                 nick = m.groupValues[1]
-                text = m.groupValues[2]
+                pid = m.groupValues[2]
+                text = m.groupValues[3]
             } else {
                 val b = BRACKET.find(line)
                 if (b != null && b.groupValues[1].lowercase() !in NOT_NICK) {
                     nick = b.groupValues[1]
-                    text = b.groupValues[2]
+                    pid = b.groupValues[2]
+                    text = b.groupValues[3]
                 }
             }
             if (nick != null) {
                 structured++
-                out.add(Msg(nick, text.trim()))
+                out.add(Msg(nick, text.trim(), pid.ifEmpty { lead }))
             } else {
-                out.add(Msg(current.ifEmpty { "?" }, line))
+                out.add(Msg(current.ifEmpty { "?" }, line, currentPid.ifEmpty { lead }))
             }
         }
         if (structured == 0 && current.isEmpty()) {
             val g = guessNick(input)
-            if (g != null) return out.map { Msg(g, it.text) }
+            if (g != null) return out.map { Msg(g, it.text, it.pid) }
         }
         return out
     }
@@ -371,7 +392,7 @@ object Engine {
     private val IP = Regex("\\b\\d{1,3}(?:\\.\\d{1,3}){3}(?::\\d{2,5})?\\b")
     private val CHAR_FLOOD = Regex("(.)\\1{7,}")
 
-    private class Hit(val nick: String, val cat: Cat?, val title: String, val rule: Rule?, val snippet: String)
+    private class Hit(val pid: String, val nick: String, val cat: Cat?, val title: String, val rule: Rule?, val snippet: String)
 
     private fun matchCat(cat: Cat, ws: List<String>, nText: String): String? {
         for (w in ws) {
@@ -430,19 +451,19 @@ object Engine {
         val sn = snippet(m.text)
         for (cat in CATS) {
             if (cat.id == "spam" || cat.id == "caps" || cat.id == "ads") continue
-            if (matchCat(cat, ws, nText) != null) hits.add(Hit(m.nick, cat, cat.title, null, sn))
+            if (matchCat(cat, ws, nText) != null) hits.add(Hit(m.pid, m.nick, cat, cat.title, null, sn))
         }
         // реклама: слова + ссылки + адреса
         val ads = CAT_BY_ID.getValue("ads")
         if (matchCat(ads, ws, nText) != null || URL.containsMatchIn(m.text) || IP.containsMatchIn(m.text)) {
-            hits.add(Hit(m.nick, ads, ads.title, null, sn))
+            hits.add(Hit(m.pid, m.nick, ads, ads.title, null, sn))
         }
         // капс
         val letters = m.text.count { it.isLetter() }
         val upper = m.text.count { it.isUpperCase() }
         if (letters >= 10 && upper * 100 / letters >= 80) {
             val c = CAT_BY_ID.getValue("caps")
-            hits.add(Hit(m.nick, c, c.title, null, sn))
+            hits.add(Hit(m.pid, m.nick, c, c.title, null, sn))
         }
         // флуд символами и словами
         var flood = CHAR_FLOOD.containsMatchIn(m.text)
@@ -458,7 +479,7 @@ object Engine {
         }
         if (flood) {
             val c = CAT_BY_ID.getValue("spam")
-            hits.add(Hit(m.nick, c, c.title, null, sn))
+            hits.add(Hit(m.pid, m.nick, c, c.title, null, sn))
         }
         // запрещённые слова из самих правил
         for (r in rules) {
@@ -466,24 +487,32 @@ object Engine {
                 val qw = words(q)
                 if (qw.isEmpty()) continue
                 val found = if (qw.size == 1) ws.any { it.startsWith(qw[0]) } else nText.contains(qw.joinToString(" "))
-                if (found) hits.add(Hit(m.nick, null, "Запрещённое слово «$q»", r, sn))
+                if (found) hits.add(Hit(m.pid, m.nick, null, "Запрещённое слово «$q»", r, sn))
             }
         }
         return hits
     }
 
     // ------------------------------------------------------------------ главный вход
-    private val NICK_ONLY = Regex("^[\\p{L}\\p{N}_.\\-]{2,24}$")
-
     fun analyze(rulesText: String, body: String, note: String): Result {
         val rules = parseRules(rulesText)
         var text = body
         var forced = ""
+        var forcedPid = ""
         val n = note.trim()
         if (n.isNotEmpty()) {
-            if (NICK_ONLY.matches(n)) forced = n else text = "$n\n$body"
+            val idOnly = IDLINE.find(n)
+            val nm = NOTE_NICK.find(n)
+            if (idOnly != null) {
+                forcedPid = idOnly.groupValues[1]
+            } else if (nm != null) {
+                forced = nm.groupValues[1]
+                forcedPid = nm.groupValues[2]
+            } else {
+                text = "$n\n$body"
+            }
         }
-        val msgs = parseMessages(text, forced)
+        val msgs = parseMessages(text, forced, forcedPid)
         if (msgs.isEmpty()) {
             return Result(emptyList(), "Не нашёл текста для проверки. Пришли скриншот чата или напиши сообщения.", 0)
         }
@@ -502,7 +531,7 @@ object Engine {
             if (c >= 3) {
                 val m = firstMsg.getValue(key)
                 val sp = CAT_BY_ID.getValue("spam")
-                hits.add(Hit(m.nick, sp, sp.title + " (одно сообщение ×" + c + ")", null, snippet(m.text)))
+                hits.add(Hit(m.pid, m.nick, sp, sp.title + " (одно сообщение ×" + c + ")", null, snippet(m.text)))
             }
         }
 
@@ -526,7 +555,8 @@ object Engine {
             var reason = h.title + ": «" + h.snippet + "»"
             if (list.size > 1) reason += " (и ещё " + (list.size - 1) + ")"
             if (rule == null) noRule.add(h.nick)
-            found.add(Found(h.nick, rule?.number ?: "", reason, rule?.punishment ?: ""))
+            val pid = list.firstOrNull { it.pid.isNotEmpty() }?.pid ?: ""
+            found.add(Found(h.nick, rule?.number ?: "", reason, rule?.punishment ?: "", pid))
         }
 
         val sb = StringBuilder()
@@ -538,6 +568,7 @@ object Engine {
             sb.append("Нашёл нарушений: ").append(found.size).append(".\n")
             for (f in found) {
                 sb.append("• ").append(f.nick)
+                if (f.pid.isNotEmpty()) sb.append(" (ID ").append(f.pid).append(")")
                 if (f.rule.isNotEmpty()) sb.append(" — ").append(ruleLabel(f.rule))
                 sb.append(": ").append(f.reason)
                 if (f.punishment.isNotEmpty()) sb.append(" → ").append(f.punishment)

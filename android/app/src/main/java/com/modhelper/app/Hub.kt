@@ -35,7 +35,8 @@ class Violation(
     var reason: String,
     var punishment: String,
     var clip: String,
-    var hidden: Boolean
+    var hidden: Boolean,
+    var pid: String = ""
 )
 
 class Violations(private val file: File) {
@@ -54,7 +55,7 @@ class Violations(private val file: File) {
                     Violation(
                         o.optString("id"), o.optLong("ts"), o.optString("nick"), o.optString("rule"),
                         o.optString("reason"), o.optString("punishment"), o.optString("clip"),
-                        o.optBoolean("hidden")
+                        o.optBoolean("hidden"), o.optString("pid")
                     )
                 )
             }
@@ -70,7 +71,7 @@ class Violations(private val file: File) {
                 arr.put(
                     JSONObject().put("id", v.id).put("ts", v.ts).put("nick", v.nick).put("rule", v.rule)
                         .put("reason", v.reason).put("punishment", v.punishment).put("clip", v.clip)
-                        .put("hidden", v.hidden)
+                        .put("hidden", v.hidden).put("pid", v.pid)
                 )
             }
             file.writeText(arr.toString())
@@ -79,22 +80,28 @@ class Violations(private val file: File) {
         }
     }
 
-    fun add(nick: String, rule: String, reason: String, punishment: String, clip: String): Violation? {
+    fun add(nick: String, rule: String, reason: String, punishment: String, clip: String, pid: String = ""): Violation? {
         val n = nick.trim().ifEmpty { "?" }
         val r = rule.trim()
         val rs = reason.trim()
         for (v in items) {
             if (v.nick.equals(n, true) && v.rule.equals(r, true) && v.reason.equals(rs, true)) {
+                var ch = false
                 if (v.hidden) {
                     v.hidden = false
-                    save()
+                    ch = true
                 }
+                if (v.pid.isEmpty() && pid.isNotBlank()) {
+                    v.pid = pid.trim()
+                    ch = true
+                }
+                if (ch) save()
                 return null
             }
         }
         val v = Violation(
             UUID.randomUUID().toString().substring(0, 10), System.currentTimeMillis(),
-            n, r, rs, punishment.trim(), clip, false
+            n, r, rs, punishment.trim(), clip, false, pid.trim()
         )
         items.add(v)
         save()
@@ -104,7 +111,7 @@ class Violations(private val file: File) {
     fun addMany(found: List<Engine.Found>, clip: String): List<Violation> {
         val out = ArrayList<Violation>()
         for (f in found) {
-            val v = add(f.nick, f.rule, f.reason, f.punishment, clip)
+            val v = add(f.nick, f.rule, f.reason, f.punishment, clip, f.pid)
             if (v != null) out.add(v)
         }
         return out
@@ -262,17 +269,62 @@ object Hub {
             .build()
     }
 
-    /** Новая фраза из голоса: в историю, и при включённой автопроверке — сразу по правилам. */
-    fun onSpeech(text: String) {
-        transcript.add(text)
+    // ---- кто сейчас говорит (телефон не различает голоса, ник указывает модератор)
+    fun speakerTag(): String {
+        val n = s("speaker_nick").trim()
+        if (n.isEmpty()) return ""
+        val p = s("speaker_pid").trim()
+        return if (p.isNotEmpty()) "$n[$p]" else n
+    }
+
+    fun setSpeaker(nick: String, pid: String) {
+        val n = nick.trim().replace(Regex("\\s+"), "_")
+        val p = pid.trim().filter { it.isDigit() }.take(10)
+        setS("speaker_nick", n)
+        setS("speaker_pid", p)
+        if (n.isNotEmpty()) {
+            val list = ArrayList<String>()
+            list.add("$n|$p")
+            for (e in s("recent_nicks").split(";")) {
+                if (e.isNotEmpty() && e.substringBefore("|") != n) list.add(e)
+            }
+            setS("recent_nicks", list.take(8).joinToString(";"))
+        }
+        changed()
         speechChanged()
-        if (i("auto_speech", 0) == 1) {
-            val res = Engine.analyze(s("rules"), text, "")
+    }
+
+    /** Недавние ники: (ник, ид) — из выбранных говорящих и из таблицы нарушений. */
+    fun recentNicks(): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        for (e in s("recent_nicks").split(";")) {
+            if (e.isEmpty()) continue
+            out.add(e.substringBefore("|") to e.substringAfter("|", ""))
+        }
+        for (v in violations.items.reversed()) {
+            if (v.nick != "?" && out.none { it.first == v.nick }) out.add(v.nick to v.pid)
+            if (out.size >= 10) break
+        }
+        return out.take(10)
+    }
+
+    /** Новая фраза из голоса: в историю с ником говорящего, и при автопроверке — сразу по правилам. */
+    fun onSpeech(text: String) {
+        val tag = speakerTag()
+        val line = if (tag.isEmpty()) text else "$tag: $text"
+        transcript.add(line)
+        speechChanged()
+        if (i("auto_speech", 1) == 1) {
+            val res = Engine.analyze(s("rules"), line, "")
             if (res.found.isNotEmpty()) {
                 val added = violations.addMany(res.found, "")
                 if (added.isNotEmpty()) {
                     changed()
-                    overlay?.flash("Речь: " + added.joinToString { it.rule.ifEmpty { "?" } + " " + it.reason.take(40) })
+                    val f = added[0]
+                    overlay?.flash(
+                        "🎤 " + f.nick + (if (f.pid.isNotEmpty()) " (ID " + f.pid + ")" else "") + ": " +
+                            f.reason.substringBefore(":") + (if (f.punishment.isNotEmpty()) " → " + f.punishment else "")
+                    )
                 }
             }
         }

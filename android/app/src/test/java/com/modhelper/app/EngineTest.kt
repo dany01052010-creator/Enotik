@@ -75,4 +75,20 @@ class EngineTest {
         val res2 = Engine.analyze("", "Vasya_228: ты идиот", "")
         assertTrue(res2.report, res2.found.size == 1 && res2.found[0].rule == "" && res2.found[0].nick == "Vasya_228")
     }
+
+    @Test
+    fun parsesPlayerIds() {
+        val res = Engine.analyze(rules, "Vasya[123]: ты идиот\n[45] Pety: хуй\nKolya (7): привет", "")
+        val rep = res.report
+        val v = find(res, "Vasya")
+        assertTrue("Vasya: $rep", v.isNotEmpty() && v[0].pid == "123" && v[0].rule == "1.2")
+        val p = find(res, "Pety")
+        assertTrue("Pety: $rep", p.isNotEmpty() && p[0].pid == "45" && p[0].rule == "1.1")
+        assertEquals("Kolya: $rep", 0, find(res, "Kolya").size)
+        val r2 = Engine.analyze(rules, "он матерился: хуй", "Ivan_Petrov 777")
+        assertTrue(r2.report, r2.found.isNotEmpty() && r2.found[0].nick == "Ivan_Petrov" && r2.found[0].pid == "777")
+        // как пишет речь: ник и ид говорящего склеены в тег
+        val r3 = Engine.analyze(rules, "Vasya_228[15]: ты тупой идиот", "")
+        assertTrue(r3.report, r3.found.size == 1 && r3.found[0].nick == "Vasya_228" && r3.found[0].pid == "15" && r3.found[0].punishment == "мут 2 часа")
+    }
 }

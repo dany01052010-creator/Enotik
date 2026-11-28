@@ -31,7 +31,8 @@ class OverlayService : Service() {
     private var panelStatus = ""
     private var extra = ArrayList<Bitmap>()
     private var panelInput: EditText? = null
-    private val refresh: () -> Unit = { render() }
+    private var speakerOpen = false
+    private val refresh: () -> Unit = { if (!panelOpen && !speakerOpen) render() }
     private var voiceSv: ScrollView? = null
     private var voiceY = 0
     private var voiceStick = true
@@ -195,6 +196,25 @@ class OverlayService : Service() {
         val body = vbox()
         body.setPadding(dp(8), dp(6), dp(8), dp(8))
 
+        // кто сейчас говорит
+        val tag = Hub.speakerTag()
+        val sbar = hbox()
+        sbar.background = rounded(C.PANEL, 8)
+        sbar.setPadding(dp(8), dp(6), dp(8), dp(6))
+        sbar.addView(
+            label("🎤 Говорит: " + (if (tag.isEmpty()) "нажми, чтобы выбрать" else tag), 12f,
+                if (tag.isEmpty()) C.WARN else C.OK, true),
+            linp(0, WRAP, 1f)
+        )
+        sbar.addView(label("✎", 14f, C.MUTED, true))
+        sbar.setOnClickListener {
+            speakerOpen = !speakerOpen
+            if (speakerOpen) panelOpen = false else setFocusable(false)
+            render()
+        }
+        body.addView(sbar, linp(MATCH, WRAP, 0f, dp(4)))
+        if (speakerOpen) body.addView(buildSpeakerPanel(), linp(MATCH, WRAP, 0f, dp(4)))
+
         if (panelOpen) body.addView(buildPanel(), linp(MATCH, WRAP, 0f, dp(4)))
 
         if (toast.isNotEmpty()) {
@@ -216,7 +236,8 @@ class OverlayService : Service() {
                 card.background = rounded(C.PANEL, 8)
                 card.setPadding(dp(8), dp(6), dp(8), dp(6))
                 val top = hbox()
-                top.addView(label(nick, 15f, C.ACCENT, true), linp(0, WRAP, 1f))
+                val pid = list.firstOrNull { it.pid.isNotEmpty() }?.pid ?: ""
+                top.addView(label(nick + (if (pid.isNotEmpty()) "  ID " + pid else ""), 15f, C.ACCENT, true), linp(0, WRAP, 1f))
                 top.addView(tap("✕", 14f) {
                     Hub.violations.hideNick(nick)
                     Hub.changed()
@@ -244,7 +265,7 @@ class OverlayService : Service() {
                 card.background = rounded(C.PANEL, 8)
                 card.setPadding(dp(8), dp(6), dp(8), dp(6))
                 val top = hbox()
-                top.addView(label(v.nick, 14f, C.ACCENT, true), linp(0, WRAP, 1f))
+                top.addView(label(v.nick + (if (v.pid.isNotEmpty()) "  ID " + v.pid else ""), 14f, C.ACCENT, true), linp(0, WRAP, 1f))
                 top.addView(label(ruleLabel(v.rule), 12f, C.MUTED))
                 top.addView(tap("✕", 13f) {
                     v.hidden = true
@@ -299,6 +320,7 @@ class OverlayService : Service() {
             flash("Сначала включи захват экрана в приложении (вкладка «Запись»)")
             return
         }
+        speakerOpen = false
         panelOpen = true
         panelText = ""
         panelStatus = ""
@@ -325,7 +347,7 @@ class OverlayService : Service() {
         p.addView(label("🚩 Жалоба", 13f, C.FG, true))
         p.addView(label(panelStatus.ifEmpty { "Снимаю экран…" }, 11f, C.WARN))
         if (extra.isNotEmpty()) p.addView(label("Доп. скриншотов: " + extra.size, 11f, C.OK))
-        val et = edit("Ник или пояснение (можно пусто)", panelText)
+        val et = edit("Ник и ID (например: Vasya 123) или пояснение", panelText)
         et.textSize = 12f
         et.setOnFocusChangeListener { _, f -> if (f) setFocusable(true) }
         et.setOnClickListener { setFocusable(true) }
@@ -339,6 +361,60 @@ class OverlayService : Service() {
         row2.addView(button("Анализ", true) { submit() }, linp(0, WRAP, 1f))
         p.addView(row2, linp(MATCH, WRAP, 0f, dp(4)))
         return p
+    }
+
+    private fun buildSpeakerPanel(): View {
+        val p = vbox()
+        p.background = rounded(C.PANEL, 8)
+        p.setPadding(dp(8), dp(8), dp(8), dp(8))
+        p.addView(label("Кто сейчас говорит", 13f, C.FG, true))
+        p.addView(label("Телефон не различает голоса. Укажи ник — следующие фразы запишутся на него.", 11f, C.MUTED))
+        val recent = Hub.recentNicks()
+        if (recent.isNotEmpty()) {
+            val hs = android.widget.HorizontalScrollView(this)
+            hs.isHorizontalScrollBarEnabled = false
+            val row = hbox()
+            for ((n, id) in recent) {
+                val chip = label(n + (if (id.isNotEmpty()) " #" + id else ""), 12f, C.ACCENT, true)
+                chip.setPadding(dp(10), dp(5), dp(10), dp(5))
+                chip.background = rounded(C.PANEL2, 12)
+                chip.setOnClickListener {
+                    Hub.setSpeaker(n, id)
+                    closeSpeaker()
+                }
+                row.addView(chip, linp(WRAP, WRAP).also { it.rightMargin = dp(4) })
+            }
+            hs.addView(row)
+            p.addView(hs, linp(MATCH, WRAP, 0f, dp(6)))
+        }
+        val nickEt = edit("Ник", Hub.s("speaker_nick"))
+        nickEt.textSize = 12f
+        val idEt = edit("ID игрока (если есть)", Hub.s("speaker_pid"))
+        idEt.textSize = 12f
+        idEt.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        for (e in listOf(nickEt, idEt)) {
+            e.setOnClickListener { setFocusable(true) }
+            e.setOnFocusChangeListener { _, f -> if (f) setFocusable(true) }
+        }
+        p.addView(nickEt, linp(MATCH, WRAP, 0f, dp(6)))
+        p.addView(idEt, linp(MATCH, WRAP, 0f, dp(4)))
+        val row2 = hbox()
+        row2.addView(button("Сбросить") {
+            Hub.setSpeaker("", "")
+            closeSpeaker()
+        }, linp(0, WRAP, 1f))
+        row2.addView(button("Готово", true) {
+            Hub.setSpeaker(nickEt.text.toString(), idEt.text.toString())
+            closeSpeaker()
+        }, linp(0, WRAP, 1f))
+        p.addView(row2, linp(MATCH, WRAP, 0f, dp(6)))
+        return p
+    }
+
+    private fun closeSpeaker() {
+        speakerOpen = false
+        setFocusable(false)
+        render()
     }
 
     private fun closePanel() {
